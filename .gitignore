@@ -1,3 +1,13 @@
+*DS_Store
+results/
+models/teacher_model/*.bin
+models/teacher_model/*.pt
+models/teacher_model/*.ckpt.*
+models/student_model/*.bin
+models/student_model/*.pt
+models/student_model/*.ckpt.*
+models/uncased_L-12_H-768_A-12/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
