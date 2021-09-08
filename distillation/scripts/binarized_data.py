@@ -25,6 +25,9 @@ import numpy as np
 
 from transformers import BertTokenizer, GPT2Tokenizer, RobertaTokenizer
 
+from datasets import load_dataset, load_metric
+from datasets import Dataset
+from datasets import DatasetDict
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s", datefmt="%m/%d/%Y %H:%M:%S", level=logging.INFO
@@ -36,7 +39,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Preprocess the data to avoid re-doing it several times by (tokenization + token_to_ids)."
     )
-    parser.add_argument("--file_path", type=str, default="data/dump.txt", help="The path to the data.")
+    parser.add_argument("--file_path", type=str, default="../../bert-mid-tuning/data-files/wikitext-15M", help="The path to the data.")
+    parser.add_argument("--cache_dir", type=str, default="tmp/", help="The path to the data.")
+    parser.add_argument("--split", type=str, default="train", help="The split to parse.")
+    parser.add_argument("--field_name", type=str, default="text", help="The field name of the column to parse.")
+    parser.add_argument("--max_parsing_example", type=int, default=-1, help="Number of example to include.")
     parser.add_argument("--tokenizer_type", type=str, default="bert", choices=["bert", "roberta", "gpt2"])
     parser.add_argument("--tokenizer_name", type=str, default="bert-base-uncased", help="The tokenizer to use.")
     parser.add_argument("--dump_file", type=str, default="data/dump", help="The dump file prefix.")
@@ -44,21 +51,36 @@ def main():
 
     logger.info(f"Loading Tokenizer ({args.tokenizer_name})")
     if args.tokenizer_type == "bert":
-        tokenizer = BertTokenizer.from_pretrained(args.tokenizer_name)
+        tokenizer = BertTokenizer.from_pretrained(
+            args.tokenizer_name,
+            cache_dir=args.cache_dir
+        )
         bos = tokenizer.special_tokens_map["cls_token"]  # `[CLS]`
         sep = tokenizer.special_tokens_map["sep_token"]  # `[SEP]`
     elif args.tokenizer_type == "roberta":
-        tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_name)
+        tokenizer = RobertaTokenizer.from_pretrained(
+            args.tokenizer_name,
+            cache_dir=args.cache_dir
+        )
         bos = tokenizer.special_tokens_map["cls_token"]  # `<s>`
         sep = tokenizer.special_tokens_map["sep_token"]  # `</s>`
     elif args.tokenizer_type == "gpt2":
-        tokenizer = GPT2Tokenizer.from_pretrained(args.tokenizer_name)
+        tokenizer = GPT2Tokenizer.from_pretrained(
+            args.tokenizer_name,
+            cache_dir=args.cache_dir
+        )
         bos = tokenizer.special_tokens_map["bos_token"]  # `<|endoftext|>`
         sep = tokenizer.special_tokens_map["eos_token"]  # `<|endoftext|>`
 
     logger.info(f"Loading text from {args.file_path}")
-    with open(args.file_path, "r", encoding="utf8") as fp:
-        data = fp.readlines()
+    # note that it has to be in the huggingface nature data file.
+    datasets = DatasetDict.load_from_disk(args.file_path)
+    data = []
+    for text in datasets[args.split]:
+        if args.max_parsing_example != -1:
+            if len(data) == args.max_parsing_example:
+                break
+        data += [text[args.field_name]]
 
     logger.info("Start encoding")
     logger.info(f"{len(data)} examples to process.")
@@ -80,7 +102,7 @@ def main():
     logger.info("Finished binarization")
     logger.info(f"{len(data)} examples processed.")
 
-    dp_file = f"{args.dump_file}.{args.tokenizer_name}.pickle"
+    dp_file = f"{args.dump_file}.{args.split}.{args.tokenizer_name}.pickle"
     vocab_size = tokenizer.vocab_size
     if vocab_size < (1 << 16):
         rslt_ = [np.uint16(d) for d in rslt]

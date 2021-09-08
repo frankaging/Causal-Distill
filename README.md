@@ -1,19 +1,29 @@
-# Auto-Distill BERT: Automatically Optimized Ditillation of BERT Model using RL
+# Causal Distillation of BERT
 
-
-### Install Requirements
-You will have to clone this repo, and install all the dependencies. You can skip this step if you have torch and cuda installed. That is all you need. You can also mannually install these without going through this installation headache that ``requirements.txt`` may give you.
+### Pre-processing the dataset
 ```bash
-cd BERT_LRP/code/
-pip install -r requirements.txt
+python script/binarized_data.py \
+--file_path ../../bert-mid-tuning/data-files/wikitext-15M \
+--split train \
+--field_name text \
+--max_parsing_example 1000 \
+--tokenizer_type bert \
+--tokenizer_name bert-base-uncased \
+--dump_file ./data/binarized_text
 ```
 
-### Download Pretrained BERT Model
-You will have to download pretrained BERT model in order to execute the fine-tune pipeline. We recommand to use models provided by the official release on BERT from [BERT-Base (Google's pre-trained models)](https://github.com/google-research/bert). Note that their model is in tensorflow format. To convert tensorflow model to pytorch model, you can use the helper script to do that. For example,
+### Generate token counts
 ```bash
-cd BERT_LRP/code/
-python convert_tf_checkpoint_to_pytorch.py \
---tf_checkpoint_path uncased_L-12_H-768_A-12/bert_model.ckpt \
---bert_config_file uncased_L-12_H-768_A-12/bert_config.json \
---pytorch_dump_path uncased_L-12_H-768_A-12/pytorch_model.bin
+python scripts/token_counts.py \
+--data_file data/binarized_text.train.bert-base-uncased.pickle \
+--token_counts_dump data/binarized_text.train.token_counts.bert-base-uncased.pickle \
+--vocab_size 30522
+```
+
+### Regular Distillation
+```bash
+```
+
+### Causal Distillation
+```bash
 ```

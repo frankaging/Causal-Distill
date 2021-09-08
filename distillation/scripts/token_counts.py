@@ -38,7 +38,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--vocab_size", default=30522, type=int)
     args = parser.parse_args()
-
+    
     logger.info(f"Loading data from {args.data_file}")
     with open(args.data_file, "rb") as fp:
         data = pickle.load(fp)
