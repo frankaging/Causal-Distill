@@ -20,7 +20,7 @@ import torch
 from torch.utils.data import Dataset
 
 from utils import logger
-
+import random
 
 class LmSeqsDataset(Dataset):
     """Custom Dataset wrapping language modeling sequences.
@@ -43,11 +43,18 @@ class LmSeqsDataset(Dataset):
         self.remove_long_sequences()
         self.remove_empty_sequences()
         self.remove_unknown_sequences()
+        
+        # initialize causal distillation pairs as well.
+        self.prepare_causal_batch()
+        
         self.check()
         self.print_statistics()
 
     def __getitem__(self, index):
-        return (self.token_ids[index], self.lengths[index])
+        return (
+            self.token_ids[index], self.lengths[index], 
+            self.dual_token_ids[index], self.dual_lengths[index]
+        )
 
     def __len__(self):
         return len(self.lengths)
@@ -59,6 +66,16 @@ class LmSeqsDataset(Dataset):
         assert len(self.token_ids) == len(self.lengths)
         assert all(self.lengths[i] == len(self.token_ids[i]) for i in range(len(self.lengths)))
 
+    def prepare_causal_batch(self):
+        logger.info(f"Preparing causal batch.")
+        self.dual_token_ids = np.copy(self.token_ids)
+        self.dual_lengths = np.copy(self.lengths)
+        causal_sort_index = [i for i in range(self.dual_token_ids.size)]
+        random.shuffle(causal_sort_index)
+        self.causal_sort_index = causal_sort_index
+        self.dual_token_ids = self.dual_token_ids[self.causal_sort_index]
+        self.dual_lengths = self.dual_lengths[self.causal_sort_index]
+        
     def remove_long_sequences(self):
         """
         Sequences that are too long are split by chunk of max_model_input_size.
@@ -147,10 +164,14 @@ class LmSeqsDataset(Dataset):
         """
         token_ids = [t[0] for t in batch]
         lengths = [t[1] for t in batch]
+        dual_token_ids = [t[2] for t in batch]
+        dual_lengths = [t[3] for t in batch]
         assert len(token_ids) == len(lengths)
+        assert len(token_ids) == len(dual_token_ids)
+        assert len(dual_token_ids) == len(dual_lengths)
 
         # Max for paddings
-        max_seq_len_ = max(lengths)
+        max_seq_len_ = max(lengths) # we need to consider both sequence!
 
         # Pad token ids
         if self.params.mlm:
@@ -158,9 +179,27 @@ class LmSeqsDataset(Dataset):
         else:
             pad_idx = self.params.special_tok_ids["unk_token"]
         tk_ = [list(t.astype(int)) + [pad_idx] * (max_seq_len_ - len(t)) for t in token_ids]
+
+        dual_tk_ = []
+        dual_length_ = []
+        index = 0
+        for t in dual_token_ids:
+            if max_seq_len_ > len(t):
+                t_padded = list(t.astype(int)) + [pad_idx] * (max_seq_len_ - len(t))
+                dual_length_ += [dual_lengths[index]]
+            else:
+                t_padded = list(t.astype(int))[:max_seq_len_]
+                dual_length_ += [max_seq_len_]
+            dual_tk_ += [t_padded]
+            index += 1
         assert len(tk_) == len(token_ids)
         assert all(len(t) == max_seq_len_ for t in tk_)
-
+        assert len(dual_tk_) == len(dual_token_ids)
+        assert all(len(t) == max_seq_len_ for t in dual_tk_)
+        
         tk_t = torch.tensor(tk_)  # (bs, max_seq_len_)
         lg_t = torch.tensor(lengths)  # (bs)
-        return tk_t, lg_t
+        dual_tk_t = torch.tensor(dual_tk_)  # (bs, max_seq_len_)
+        dual_lg_t = torch.tensor(dual_length_)  # (bs)
+        
+        return tk_t, lg_t, dual_tk_t, dual_lg_t

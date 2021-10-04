@@ -31,10 +31,11 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", default="bert-base-uncased", type=str)
     parser.add_argument("--dump_checkpoint", default="serialization_dir/tf_bert-base-uncased_0247911.pth", type=str)
     parser.add_argument("--vocab_transform", action="store_true")
+    parser.add_argument("--num_layers", type=int, default=6)
     args = parser.parse_args()
 
     if args.model_type == "bert":
-        model = BertForMaskedLM.from_pretrained(args.model_name)
+        model = BertForMaskedLM.from_pretrained(args.model_name, cache_dir="../tmp/")
         prefix = "bert"
     else:
         raise ValueError('args.model_type should be "bert".')
@@ -48,7 +49,7 @@ if __name__ == "__main__":
         compressed_sd[f"distilbert.embeddings.LayerNorm.{w}"] = state_dict[f"{prefix}.embeddings.LayerNorm.{w}"]
 
     std_idx = 0
-    for teacher_idx in [0, 2, 4, 7, 9, 11]:
+    for teacher_idx in [0, 2, 4, 7, 9, 11][:args.num_layers]: # we may only need a small number of layers.
         for w in ["weight", "bias"]:
             compressed_sd[f"distilbert.transformer.layer.{std_idx}.attention.q_lin.{w}"] = state_dict[
                 f"{prefix}.encoder.layer.{teacher_idx}.attention.self.query.{w}"

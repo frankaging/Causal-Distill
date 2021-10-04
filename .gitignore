@@ -1,3 +1,8 @@
+wikitext-15M/
+wandb/
+*checkpoints/
+*_cache/
+tmp/
 */data/
 */tmp/
 *DS_Store
