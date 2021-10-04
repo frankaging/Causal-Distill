@@ -54,7 +54,6 @@ from transformers import (
     BertForMaskedLM,
     BertTokenizer,
     DistilBertConfig,
-    DistilBertForMaskedLM,
     DistilBertTokenizer,
     GPT2Config,
     GPT2LMHeadModel,
@@ -69,6 +68,7 @@ from utils import git_log, init_gpu_params, logger, set_seed
 from datasets import load_dataset
 from counterfactual_utils import *
 import wandb
+from models.modeling_distilbert import DistilBertForMaskedLM
 
 # Examples of interchange.
 # activations_counterfactual_teacher = get_activation_at(
@@ -108,17 +108,18 @@ class CausalDistiller:
         self.teacher = teacher
         
         # causal neuron mappings.
-        self.teacher_variable_names=["$L:1$H:1$[0:32]"]
-        self.student_variable_names=["$L:1$H:1$[0:32]"]
+        self.teacher_variable_names=["$L:0$H:1$[0:32]"]
+        self.student_variable_names=["$L:0$H:1$[0:32]"]
 
         self.student_config = student.config
         self.vocab_size = student.config.vocab_size
 
-        if params.n_gpu <= 1:
+        # overwrite slightly on this.
+        if params.local_rank == -1:
             sampler = RandomSampler(dataset)
         else:
             sampler = DistributedSampler(dataset)
-
+            
         if params.group_by_size:
             groups = create_lengths_groups(lengths=dataset.lengths, k=params.max_model_input_size)
             sampler = GroupedBatchSampler(sampler=sampler, group_ids=groups, batch_size=params.batch_size)
@@ -144,8 +145,8 @@ class CausalDistiller:
             assert 0.0 <= self.mlm_mask_prop <= 1.0
             assert params.word_mask + params.word_keep + params.word_rand == 1.0
             self.pred_probs = torch.FloatTensor([params.word_mask, params.word_keep, params.word_rand])
-            self.pred_probs = self.pred_probs.to(f"cuda:{params.local_rank}") if params.n_gpu > 0 else self.pred_probs
-            self.token_probs = token_probs.to(f"cuda:{params.local_rank}") if params.n_gpu > 0 else token_probs
+            self.pred_probs = self.pred_probs.to(torch.device("cuda")) if params.n_gpu > 0 else self.pred_probs
+            self.token_probs = token_probs.to(torch.device("cuda")) if params.n_gpu > 0 else token_probs
             if self.fp16:
                 self.pred_probs = self.pred_probs.half()
                 self.token_probs = self.token_probs.half()
@@ -230,15 +231,20 @@ class CausalDistiller:
                 logger.info("Using apex.parallel.DistributedDataParallel for distributed training.")
                 self.student = DistributedDataParallel(self.student)
             else:
-                from torch.nn.parallel import DistributedDataParallel
+                if params.local_rank == -1:
+                    logger.info("Using nn.DataParallel for parallel training.")
+                    self.student = torch.nn.DataParallel(self.student)
+                else:
+                
+                    from torch.nn.parallel import DistributedDataParallel
 
-                logger.info("Using nn.parallel.DistributedDataParallel for distributed training.")
-                self.student = DistributedDataParallel(
-                    self.student,
-                    device_ids=[params.local_rank],
-                    output_device=params.local_rank,
-                    find_unused_parameters=True,
-                )
+                    logger.info("Using nn.parallel.DistributedDataParallel for distributed training.")
+                    self.student = DistributedDataParallel(
+                        self.student,
+                        device_ids=[params.local_rank],
+                        output_device=params.local_rank,
+                        find_unused_parameters=True,
+                    )
 
         self.is_master = params.is_master
         
@@ -293,7 +299,7 @@ class CausalDistiller:
         _token_ids_real = token_ids[pred_mask]
         _token_ids_rand = _token_ids_real.clone().random_(self.vocab_size)
         _token_ids_mask = _token_ids_real.clone().fill_(self.params.special_tok_ids["mask_token"])
-        probs = torch.multinomial(self.pred_probs, len(_token_ids_real), replacement=True)
+        probs = torch.multinomial(self.pred_probs, len(_token_ids_real), replacement=True).to(_token_ids_real.device)
         _token_ids = (
             _token_ids_mask * (probs == 0).long()
             + _token_ids_real * (probs == 1).long()
@@ -397,14 +403,15 @@ class CausalDistiller:
         for _ in range(self.params.n_epoch):
             if self.is_master:
                 logger.info(f"--- Starting epoch {self.epoch}/{self.params.n_epoch-1}")
-            if self.multi_gpu:
-                torch.distributed.barrier()
 
             iter_bar = tqdm(self.dataloader, desc="-Iter", disable=self.params.local_rank not in [-1, 0])
             for batch in iter_bar:
                 token_ids, lengths, dual_token_ids, dual_lengths = batch
                 if self.params.n_gpu > 0:
-                    batch = tuple(t.to(f"cuda:{self.params.local_rank}") for t in batch)
+                    token_ids = token_ids.to(torch.device("cuda"))
+                    lengths = lengths.to(torch.device("cuda"))
+                    dual_token_ids = dual_token_ids.to(torch.device("cuda"))
+                    dual_lengths = dual_lengths.to(torch.device("cuda"))
 
                 if self.mlm:
                     token_ids, attn_mask, lm_labels = self.prepare_batch_mlm(batch=(token_ids, lengths))
@@ -550,12 +557,19 @@ class CausalDistiller:
                 dual_attention_mask, # this is different!
                 variable_names=self.student_variable_names
             )
-            counterfactual_outputs_student = interchange_with_activation_at(
-                self.student,
-                input_ids, # this is different!
-                attention_mask, # this is different!
+            interchanged_variables_mapping = {}
+            # we need to do the interchange here.
+            for i, variable in enumerate(self.student_variable_names):
+                layer_index, head_index, LOC = parse_variable_name(variable)
+                if layer_index in interchanged_variables_mapping:
+                    interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
+                else:
+                    interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
+            counterfactual_outputs_student = self.student(
+                input_ids=input_ids, # this is different!
+                attention_mask=attention_mask, # this is different!
                 interchanged_variables=counterfactual_activations_student,
-                variable_names=self.student_variable_names
+                variable_names=interchanged_variables_mapping
             )
             # similiar to mlm, we need to do some post-processing!
             causal_s_logits, causal_s_hidden_states = \

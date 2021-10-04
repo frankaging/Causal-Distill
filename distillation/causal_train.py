@@ -39,7 +39,6 @@ from transformers import (
     BertForMaskedLM,
     BertTokenizer,
     DistilBertConfig,
-    DistilBertForMaskedLM,
     DistilBertTokenizer,
     GPT2Config,
     GPT2LMHeadModel,
@@ -48,6 +47,7 @@ from transformers import (
     RobertaForMaskedLM,
     RobertaTokenizer,
 )
+from models.modeling_distilbert import DistilBertForMaskedLM # we need to customize it a little.
 from utils import git_log, init_gpu_params, logger, set_seed
 
 
@@ -184,7 +184,7 @@ def prepare_distiller(args):
         student = student_model_class(stu_architecture_config)
 
     if args.n_gpu > 0:
-        student.to(f"cuda:{args.local_rank}")
+        student.to(torch.device("cuda")) # no rank is needed!
     logger.info("Student loaded.")
 
     # TEACHER #
@@ -193,7 +193,7 @@ def prepare_distiller(args):
         cache_dir=args.cache_dir
     )
     if args.n_gpu > 0:
-        teacher.to(f"cuda:{args.local_rank}")
+        teacher.to(torch.device("cuda")) # no rank is needed!
     logger.info(f"Teacher loaded from {args.teacher_name}.")
 
     # FREEZING #
@@ -359,7 +359,6 @@ if __name__ == "__main__":
     parser.add_argument("--run_name", type=str, help="Name of this run.")
     
     try:
-        print("Prelude: running in notebook for testing only.")
         get_ipython().run_line_magic('matplotlib', 'inline')
         parser.set_defaults(
             # Exp management:
@@ -381,13 +380,15 @@ if __name__ == "__main__":
             is_wandb=True,
             log_interval=10,
         )
+        print("Prelude: running in notebook for testing only.")
         args = parser.parse_args([])
     except:
         print("Prelude: running with command line.")
         args = parser.parse_args()
     
     # config the runname here and overwrite.
-    run_name = f"s_{args.student_type}_t_{args.teacher_type}_seed_{args.seed}_mlm_{args.mlm}_ce_{args.alpha_ce}_mlm_{args.alpha_mlm}_cos_{args.alpha_cos}_causal_{args.alpha_causal}"
+    data_name = args.data_file.split("/")[-2]
+    run_name = f"s_{args.student_type}_t_{args.teacher_type}_data_{data_name}_seed_{args.seed}_mlm_{args.mlm}_ce_{args.alpha_ce}_mlm_{args.alpha_mlm}_cos_{args.alpha_cos}_causal_{args.alpha_causal}"
     args.run_name = run_name
     args.dump_path = os.path.join(args.dump_path, args.run_name)
     sanity_checks(args)
