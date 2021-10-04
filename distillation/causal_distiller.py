@@ -108,8 +108,11 @@ class CausalDistiller:
         self.teacher = teacher
         
         # causal neuron mappings.
-        self.teacher_variable_names=["$L:0$H:1$[0:32]"]
-        self.student_variable_names=["$L:0$H:1$[0:32]"]
+        with open(params.neuron_mapping) as json_file:
+            neuron_mapping = json.load(json_file)
+            logger.info(f"Neuron Mapping: {neuron_mapping}")
+            self.teacher_variable_names=neuron_mapping["teacher_variable_names"]
+            self.student_variable_names=neuron_mapping["student_variable_names"]
 
         self.student_config = student.config
         self.vocab_size = student.config.vocab_size
@@ -614,7 +617,7 @@ class CausalDistiller:
         # optional recording of the value.
         if self.alpha_causal > 0.0:
             self.last_loss_causal_ce = causal_loss_ce.item()
-
+            
         self.optimize(loss)
 
         self.n_sequences_epoch += input_ids.size(0)

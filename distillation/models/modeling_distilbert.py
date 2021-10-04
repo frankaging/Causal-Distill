@@ -343,7 +343,6 @@ class Transformer(nn.Module):
                     start_index = interchanged_variable[1]*self.head_dimension + interchanged_variable[2].start
                     stop_index = start_index + interchanged_variable[2].stop
                     hidden_state[:,:,start_index:stop_index] = interchanged_activations
-            
             if output_attentions:
                 assert len(layer_outputs) == 2
                 attentions = layer_outputs[0]

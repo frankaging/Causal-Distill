@@ -255,6 +255,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--teacher_name", type=str, help="The teacher model.")
 
+    parser.add_argument(
+        "--neuron_mapping",
+        type=str,
+        help="Predefined neuron mapping for the interchange experiment.",
+    )
+    
     parser.add_argument("--temperature", default=2.0, type=float, help="Temperature for the softmax temperature.")
     parser.add_argument(
         "--alpha_ce", default=0.5, type=float, help="Linear weight for the distillation loss. Must be >=0."
