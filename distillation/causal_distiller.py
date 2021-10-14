@@ -169,8 +169,8 @@ class CausalDistiller:
             self.last_loss_mse = 0
         if self.alpha_cos > 0.0:
             self.last_loss_cos = 0
-        if self.alpha_causal > 0.0:
-            self.last_loss_causal_ce = 0
+
+        self.last_loss_causal_ce = 0
         self.last_log = 0
 
         self.ce_loss_fct = nn.KLDivLoss(reduction="batchmean")
@@ -538,69 +538,70 @@ class CausalDistiller:
             target = s_hidden_states_slct.new(s_hidden_states_slct.size(0)).fill_(1)  # (bs * seq_length,)
             loss_cos = self.cosine_loss_fct(s_hidden_states_slct, t_hidden_states_slct, target)
             loss += self.alpha_cos * loss_cos
-        if self.alpha_causal > 0.0:
-            with torch.no_grad():
-                counterfactual_activations_teacher = get_activation_at(
-                    self.teacher,
-                    dual_input_ids, # this is different!
-                    dual_attention_mask, # this is different!
-                    variable_names=self.teacher_variable_names
-                )
-                counterfactual_outputs_teacher = interchange_with_activation_at(
-                    self.teacher,
-                    input_ids, # this is different!
-                    attention_mask, # this is different!
-                    interchanged_variables=counterfactual_activations_teacher,
-                    variable_names=self.teacher_variable_names
-                )
-            # we need to get causal distillation loss!
-            counterfactual_activations_student = get_activation_at(
-                self.student,
+        
+        with torch.no_grad():
+            counterfactual_activations_teacher = get_activation_at(
+                self.teacher,
                 dual_input_ids, # this is different!
                 dual_attention_mask, # this is different!
-                variable_names=self.student_variable_names
+                variable_names=self.teacher_variable_names
             )
-            interchanged_variables_mapping = {}
-            # we need to do the interchange here.
-            for i, variable in enumerate(self.student_variable_names):
-                layer_index, head_index, LOC = parse_variable_name(variable)
-                if layer_index in interchanged_variables_mapping:
-                    interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
-                else:
-                    interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
-            counterfactual_outputs_student = self.student(
-                input_ids=input_ids, # this is different!
-                attention_mask=attention_mask, # this is different!
-                interchanged_variables=counterfactual_activations_student,
-                variable_names=interchanged_variables_mapping
+            counterfactual_outputs_teacher = interchange_with_activation_at(
+                self.teacher,
+                input_ids, # this is different!
+                attention_mask, # this is different!
+                interchanged_variables=counterfactual_activations_teacher,
+                variable_names=self.teacher_variable_names
             )
-            # similiar to mlm, we need to do some post-processing!
-            causal_s_logits, causal_s_hidden_states = \
-                counterfactual_outputs_student["logits"], counterfactual_outputs_student["hidden_states"]
-            causal_t_logits, causal_t_hidden_states = \
-                counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
-            assert causal_s_logits.size() == causal_t_logits.size()
-            # calculate the loss!
-            
-            # https://github.com/peterliht/knowledge-distillation-pytorch/blob/master/model/net.py#L100
-            # https://github.com/peterliht/knowledge-distillation-pytorch/issues/2
-            if self.params.restrict_ce_to_mask:
-                causal_mask = (lm_labels > -1).unsqueeze(-1).expand_as(causal_s_logits)  # (bs, seq_length, voc_size)
+        # we need to get causal distillation loss!
+        counterfactual_activations_student = get_activation_at(
+            self.student,
+            dual_input_ids, # this is different!
+            dual_attention_mask, # this is different!
+            variable_names=self.student_variable_names
+        )
+        interchanged_variables_mapping = {}
+        # we need to do the interchange here.
+        for i, variable in enumerate(self.student_variable_names):
+            layer_index, head_index, LOC = parse_variable_name(variable)
+            if layer_index in interchanged_variables_mapping:
+                interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
             else:
-                causal_mask = attention_mask.unsqueeze(-1).expand_as(causal_s_logits)  # (bs, seq_length, voc_size)
-            causal_s_logits_slct = torch.masked_select(causal_s_logits, causal_mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
-            causal_s_logits_slct = causal_s_logits_slct.view(-1, causal_s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
-            causal_t_logits_slct = torch.masked_select(causal_t_logits, causal_mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
-            causal_t_logits_slct = causal_t_logits_slct.view(-1, causal_s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
-            assert causal_t_logits_slct.size() == causal_s_logits_slct.size()
+                interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
+        counterfactual_outputs_student = self.student(
+            input_ids=input_ids, # this is different!
+            attention_mask=attention_mask, # this is different!
+            interchanged_variables=counterfactual_activations_student,
+            variable_names=interchanged_variables_mapping
+        )
+        # similiar to mlm, we need to do some post-processing!
+        causal_s_logits, causal_s_hidden_states = \
+            counterfactual_outputs_student["logits"], counterfactual_outputs_student["hidden_states"]
+        causal_t_logits, causal_t_hidden_states = \
+            counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
+        assert causal_s_logits.size() == causal_t_logits.size()
+        # calculate the loss!
 
-            causal_loss_ce = (
-                self.ce_loss_fct(
-                    nn.functional.log_softmax(causal_s_logits_slct / self.temperature, dim=-1),
-                    nn.functional.softmax(causal_t_logits_slct / self.temperature, dim=-1),
-                )
-                * (self.temperature) ** 2
+        # https://github.com/peterliht/knowledge-distillation-pytorch/blob/master/model/net.py#L100
+        # https://github.com/peterliht/knowledge-distillation-pytorch/issues/2
+        if self.params.restrict_ce_to_mask:
+            causal_mask = (lm_labels > -1).unsqueeze(-1).expand_as(causal_s_logits)  # (bs, seq_length, voc_size)
+        else:
+            causal_mask = attention_mask.unsqueeze(-1).expand_as(causal_s_logits)  # (bs, seq_length, voc_size)
+        causal_s_logits_slct = torch.masked_select(causal_s_logits, causal_mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
+        causal_s_logits_slct = causal_s_logits_slct.view(-1, causal_s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
+        causal_t_logits_slct = torch.masked_select(causal_t_logits, causal_mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
+        causal_t_logits_slct = causal_t_logits_slct.view(-1, causal_s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
+        assert causal_t_logits_slct.size() == causal_s_logits_slct.size()
+
+        causal_loss_ce = (
+            self.ce_loss_fct(
+                nn.functional.log_softmax(causal_s_logits_slct / self.temperature, dim=-1),
+                nn.functional.softmax(causal_t_logits_slct / self.temperature, dim=-1),
             )
+            * (self.temperature) ** 2
+        )
+        if self.alpha_causal > 0.0:
             loss += self.alpha_causal * causal_loss_ce
                 
         self.total_loss_epoch += loss.item()
@@ -615,8 +616,7 @@ class CausalDistiller:
         if self.alpha_cos > 0.0:
             self.last_loss_cos = loss_cos.item()
         # optional recording of the value.
-        if self.alpha_causal > 0.0:
-            self.last_loss_causal_ce = causal_loss_ce.item()
+        self.last_loss_causal_ce = causal_loss_ce.item()
             
         self.optimize(loss)
 
@@ -705,11 +705,11 @@ class CausalDistiller:
                 {"train/loss_cos": self.last_loss_cos}, 
                 step=self.n_total_iter
             )
-        if self.alpha_causal > 0.0:
-            wandb.log(
-                {"train/loss_causal_ce": self.last_loss_causal_ce}, 
-                step=self.n_total_iter
-            )
+
+        wandb.log(
+            {"train/loss_causal_ce": self.last_loss_causal_ce}, 
+            step=self.n_total_iter
+        )
         wandb.log(
             {
                 "train/learning_rate": self.scheduler.get_lr()[0],
