@@ -53,7 +53,7 @@ def init_gpu_params(params):
     Handle single and multi-GPU / multi-node.
     """
     if params.n_gpu <= 0:
-        params.local_rank = 0
+        params.local_rank = -1
         params.master_port = -1
         params.is_master = True
         params.multi_gpu = False

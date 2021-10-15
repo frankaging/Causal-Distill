@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[6]:
+# In[ ]:
 
 
 # coding=utf-8
@@ -59,7 +59,7 @@ MODEL_CLASSES = {
 }
 
 
-# In[3]:
+# In[ ]:
 
 
 def sanity_checks(args):
@@ -218,7 +218,7 @@ def prepare_distiller(args):
     return distiller
 
 
-# In[4]:
+# In[ ]:
 
 
 if __name__ == "__main__":
@@ -289,6 +289,17 @@ if __name__ == "__main__":
         type=float,
         help="Proportion of tokens for which we need to make a prediction.",
     )
+    
+    parser.add_argument(
+        "--interchange_mlm", action="store_true", help="Whehter to follow mlm to select token positions to do interchange."
+    )
+    parser.add_argument(
+        "--interchange_prop",
+        default=0.3,
+        type=float,
+        help="Ratio of tokens to mask for interchange interventions. 1.0 means interchange all.",
+    )
+    
     parser.add_argument("--word_mask", default=0.8, type=float, help="Proportion of tokens to mask out.")
     parser.add_argument("--word_keep", default=0.1, type=float, help="Proportion of tokens to keep.")
     parser.add_argument("--word_rand", default=0.1, type=float, help="Proportion of tokens to randomly replace.")
@@ -383,8 +394,11 @@ if __name__ == "__main__":
             force=True,
             data_file="./demo_data/binarized_text.train.bert-base-uncased.pickle",
             n_gpu=0,
-            is_wandb=True,
+            is_wandb=False,
             log_interval=10,
+            neuron_mapping="./training_configs/neuron_mapping.json",
+            local_rank=-1,
+            interchange_prop=0.3
         )
         print("Prelude: running in notebook for testing only.")
         args = parser.parse_args([])
@@ -403,4 +417,10 @@ if __name__ == "__main__":
     
     distiller.train()
     logger.info("Hey Zen: Let's go get some drinks.")
+
+
+# In[ ]:
+
+
+
 

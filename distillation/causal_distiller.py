@@ -42,6 +42,7 @@ import json
 import os
 import pickle
 import shutil
+import random
 
 import numpy as np
 import torch
@@ -97,6 +98,7 @@ class CausalDistiller:
                 name=params.run_name,
             )
             wandb.config.update(params)
+        self.is_wandb = params.is_wandb
         
         logger.info("Initializing Distiller")
         self.params = params
@@ -108,11 +110,21 @@ class CausalDistiller:
         self.teacher = teacher
         
         # causal neuron mappings.
+        self.deserialized_interchange_variable_mappings = []
         with open(params.neuron_mapping) as json_file:
             neuron_mapping = json.load(json_file)
             logger.info(f"Neuron Mapping: {neuron_mapping}")
-            self.teacher_variable_names=neuron_mapping["teacher_variable_names"]
-            self.student_variable_names=neuron_mapping["student_variable_names"]
+            interchange_variable_mappings = neuron_mapping["interchange_variable_mappings"]
+            for m in interchange_variable_mappings:
+                teacher_deserialized_variables = []
+                for variable in m["teacher_variable_names"]:
+                    teacher_deserialized_variables.append(deserialize_variable_name(variable))
+                student_deserialized_variables = []
+                for variable in m["student_variable_names"]:
+                    student_deserialized_variables.append(deserialize_variable_name(variable))
+                self.deserialized_interchange_variable_mappings += [
+                    [teacher_deserialized_variables, student_deserialized_variables]
+                ]
 
         self.student_config = student.config
         self.vocab_size = student.config.vocab_size
@@ -156,6 +168,9 @@ class CausalDistiller:
         else:
             logger.info("Using CLM loss for LM step.")
 
+        self.interchange_mlm = params.interchange_mlm
+        self.interchange_prop = params.interchange_prop
+            
         self.epoch = 0
         self.n_iter = 0
         self.n_total_iter = 0
@@ -171,6 +186,8 @@ class CausalDistiller:
             self.last_loss_cos = 0
 
         self.last_loss_causal_ce = 0
+        self.last_teacher_interchange_efficacy = 0
+        self.last_student_interchange_efficacy = 0
         self.last_log = 0
 
         self.ce_loss_fct = nn.KLDivLoss(reduction="batchmean")
@@ -393,6 +410,21 @@ class CausalDistiller:
         assert x.size(1) % 8 == 0
         return x, lengths
 
+    def prepare_interchange_position(self, lengths, dual_lengths):
+        interchange_prop = self.interchange_prop
+        batch_size = lengths.shape[0]
+        interchange_position = []
+        for i in range(0, batch_size):
+            min_len = min(lengths[i].tolist(), dual_lengths[i].tolist())
+            interchange_count = int(min_len*interchange_prop)
+            start_index = random.randint(0, lengths[i].tolist()-interchange_count)
+            end_index = start_index + interchange_count
+            dual_start_index = random.randint(0, dual_lengths[i].tolist()-interchange_count)
+            dual_end_index = dual_start_index + interchange_count
+            interchange_position += [[start_index, end_index, dual_start_index, dual_end_index]]
+        interchange_position = torch.tensor(interchange_position, dtype=torch.long).to(lengths.device)
+        return interchange_position
+    
     def train(self):
         """
         The real training loop.
@@ -410,12 +442,15 @@ class CausalDistiller:
             iter_bar = tqdm(self.dataloader, desc="-Iter", disable=self.params.local_rank not in [-1, 0])
             for batch in iter_bar:
                 token_ids, lengths, dual_token_ids, dual_lengths = batch
+                # from length, let us get the intervention points?
+                sampled_interchange_position = self.prepare_interchange_position(lengths, dual_lengths)
+                
                 if self.params.n_gpu > 0:
                     token_ids = token_ids.to(torch.device("cuda"))
                     lengths = lengths.to(torch.device("cuda"))
                     dual_token_ids = dual_token_ids.to(torch.device("cuda"))
                     dual_lengths = dual_lengths.to(torch.device("cuda"))
-
+                
                 if self.mlm:
                     token_ids, attn_mask, lm_labels = self.prepare_batch_mlm(batch=(token_ids, lengths))
                     dual_token_ids, dual_attn_mask, dual_lm_labels = self.prepare_batch_mlm(
@@ -433,6 +468,7 @@ class CausalDistiller:
                     dual_input_ids=dual_token_ids, 
                     dual_attention_mask=dual_attn_mask, 
                     dual_lm_labels=dual_lm_labels,
+                    sampled_interchange_position=sampled_interchange_position,
                 )
                 iter_bar.update()
                 iter_bar.set_postfix(
@@ -460,6 +496,7 @@ class CausalDistiller:
         dual_input_ids: torch.tensor, 
         dual_attention_mask: torch.tensor, 
         dual_lm_labels: torch.tensor,
+        sampled_interchange_position: torch.tensor,
     ):
         """
         One optimization step: forward of student AND teacher, backward on the loss (for gradient accumulation),
@@ -539,30 +576,38 @@ class CausalDistiller:
             loss_cos = self.cosine_loss_fct(s_hidden_states_slct, t_hidden_states_slct, target)
             loss += self.alpha_cos * loss_cos
         
+        # we randomly select the pool of neurons to interchange.
+        selector = random.randint(0, len(self.deserialized_interchange_variable_mappings)-1)
+        interchange_variable_mapping = self.deserialized_interchange_variable_mappings[selector]
+        teacher_variable_names = random.choice(interchange_variable_mapping[0])
+        student_variable_names = random.choice(interchange_variable_mapping[1])
+        
         with torch.no_grad():
             counterfactual_activations_teacher = get_activation_at(
                 self.teacher,
                 dual_input_ids, # this is different!
                 dual_attention_mask, # this is different!
-                variable_names=self.teacher_variable_names
+                variable_names=teacher_variable_names
             )
             counterfactual_outputs_teacher = interchange_with_activation_at(
                 self.teacher,
                 input_ids, # this is different!
                 attention_mask, # this is different!
                 interchanged_variables=counterfactual_activations_teacher,
-                variable_names=self.teacher_variable_names
+                variable_names=teacher_variable_names,
+                sampled_interchange_position=sampled_interchange_position,
             )
+        
         # we need to get causal distillation loss!
         counterfactual_activations_student = get_activation_at(
             self.student,
             dual_input_ids, # this is different!
             dual_attention_mask, # this is different!
-            variable_names=self.student_variable_names
+            variable_names=student_variable_names
         )
         interchanged_variables_mapping = {}
         # we need to do the interchange here.
-        for i, variable in enumerate(self.student_variable_names):
+        for i, variable in enumerate(student_variable_names):
             layer_index, head_index, LOC = parse_variable_name(variable)
             if layer_index in interchanged_variables_mapping:
                 interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
@@ -572,7 +617,8 @@ class CausalDistiller:
             input_ids=input_ids, # this is different!
             attention_mask=attention_mask, # this is different!
             interchanged_variables=counterfactual_activations_student,
-            variable_names=interchanged_variables_mapping
+            variable_names=interchanged_variables_mapping,
+            sampled_interchange_position=sampled_interchange_position,
         )
         # similiar to mlm, we need to do some post-processing!
         causal_s_logits, causal_s_hidden_states = \
@@ -593,6 +639,20 @@ class CausalDistiller:
         causal_t_logits_slct = torch.masked_select(causal_t_logits, causal_mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
         causal_t_logits_slct = causal_t_logits_slct.view(-1, causal_s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
         assert causal_t_logits_slct.size() == causal_s_logits_slct.size()
+        
+        # measure the efficacy of the interchange.
+        teacher_interchange_efficacy = (
+            self.ce_loss_fct(
+                nn.functional.log_softmax(causal_t_logits_slct, dim=-1),
+                nn.functional.softmax(t_logits_slct, dim=-1),
+            )
+        )
+        student_interchange_efficacy = (
+            self.ce_loss_fct(
+                nn.functional.log_softmax(causal_s_logits_slct, dim=-1),
+                nn.functional.softmax(s_logits_slct, dim=-1),
+            )
+        )
 
         causal_loss_ce = (
             self.ce_loss_fct(
@@ -617,6 +677,9 @@ class CausalDistiller:
             self.last_loss_cos = loss_cos.item()
         # optional recording of the value.
         self.last_loss_causal_ce = causal_loss_ce.item()
+        # record efficacy of the interchange.
+        self.last_teacher_interchange_efficacy = teacher_interchange_efficacy.item()
+        self.last_student_interchange_efficacy = student_interchange_efficacy.item()
             
         self.optimize(loss)
 
@@ -675,6 +738,9 @@ class CausalDistiller:
         """
         if not self.is_master:
             return
+        
+        if not self.is_wandb:
+            return
 
         wandb.log(
             {
@@ -707,9 +773,14 @@ class CausalDistiller:
             )
 
         wandb.log(
-            {"train/loss_causal_ce": self.last_loss_causal_ce}, 
+            {
+                "train/loss_causal_ce": self.last_loss_causal_ce,
+                "train/teacher_interchange_efficacy": self.last_teacher_interchange_efficacy,
+                "train/student_interchange_efficacy": self.last_student_interchange_efficacy,
+            }, 
             step=self.n_total_iter
         )
+        
         wandb.log(
             {
                 "train/learning_rate": self.scheduler.get_lr()[0],

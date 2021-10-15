@@ -305,7 +305,8 @@ class Transformer(nn.Module):
         self, x, attn_mask=None, head_mask=None, output_attentions=False, output_hidden_states=False, return_dict=None,
         # for interchange.
         interchanged_variables=None, 
-        variable_names=None
+        variable_names=None,
+        sampled_interchange_position=None,
     ):  # docstyle-ignore
         """
         Parameters:
@@ -342,7 +343,14 @@ class Transformer(nn.Module):
                     interchanged_activations = interchanged_variables[interchanged_variable[0]]
                     start_index = interchanged_variable[1]*self.head_dimension + interchanged_variable[2].start
                     stop_index = start_index + interchanged_variable[2].stop
-                    hidden_state[:,:,start_index:stop_index] = interchanged_activations
+                    # TODO: we also need to consider the position.
+                    batch_size = hidden_state.shape[0]
+                    for j in range(batch_size):
+                        s = sampled_interchange_position[i][0]
+                        e = sampled_interchange_position[i][1]
+                        d_s = sampled_interchange_position[i][2]
+                        d_e = sampled_interchange_position[i][3]
+                        hidden_state[j,s:e,start_index:stop_index] = interchanged_activations[j,d_s:d_e,:]
             if output_attentions:
                 assert len(layer_outputs) == 2
                 attentions = layer_outputs[0]
@@ -538,7 +546,8 @@ class DistilBertModel(DistilBertPreTrainedModel):
         return_dict=None,
         # for interchange.
         interchanged_variables=None, 
-        variable_names=None
+        variable_names=None,
+        sampled_interchange_position=None,
     ):
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -574,6 +583,7 @@ class DistilBertModel(DistilBertPreTrainedModel):
             return_dict=return_dict,
             interchanged_variables=interchanged_variables,
             variable_names=variable_names,
+            sampled_interchange_position=sampled_interchange_position,
         )
 
 
@@ -640,7 +650,8 @@ class DistilBertForMaskedLM(DistilBertPreTrainedModel):
         return_dict=None,
         # for interchange.
         interchanged_variables=None, 
-        variable_names=None
+        variable_names=None,
+        sampled_interchange_position=None,
     ):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
@@ -660,6 +671,7 @@ class DistilBertForMaskedLM(DistilBertPreTrainedModel):
             return_dict=return_dict,
             interchanged_variables=interchanged_variables,
             variable_names=variable_names,
+            sampled_interchange_position=sampled_interchange_position,
         )
         hidden_states = dlbrt_output[0]  # (bs, seq_length, dim)
         prediction_logits = self.vocab_transform(hidden_states)  # (bs, seq_length, dim)
