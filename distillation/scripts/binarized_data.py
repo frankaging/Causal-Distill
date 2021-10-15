@@ -48,6 +48,14 @@ def main():
     parser.add_argument("--tokenizer_type", type=str, default="bert", choices=["bert", "roberta", "gpt2"])
     parser.add_argument("--tokenizer_name", type=str, default="bert-base-uncased", help="The tokenizer to use.")
     parser.add_argument("--dump_file", type=str, default="data/dump", help="The dump file prefix.")
+    parser.add_argument("--fast_process",
+                        default=False,
+                        action='store_true',
+                        help="Whether to use multi-processing to process the data.")
+    parser.add_argument("--preprocessing_num_workers", type=int, default=10, help="Number of process to preprocess the dataset")
+    
+    
+    
     args = parser.parse_args()
     
     # you need to at least, and only one, specify one of them.
@@ -114,16 +122,44 @@ def main():
     iter = 0
     interval = 10000
     start = time.time()
-    for text in data:
-        text = f"{bos} {text.strip()} {sep}"
-        token_ids = tokenizer.encode(text, add_special_tokens=False)
-        rslt.append(token_ids)
+    if args.fast_process:
+        logger.info(f"We will use multi-processing to process the datasets.")
+        # When using line_by_line, we just tokenize each nonempty line.
+        padding = "max_length" if data_args.pad_to_max_length else False
+        text_column_name = args.split
+        def tokenize_function(examples):
+            token_ids = tokenizer.encode(
+                examples[text_column_name], add_special_tokens=False
+            )
+            batch_size = token_ids.shape[0]
+            for i in range(batch_size):
+                rslt.append(token_ids[i])
+                iter += 1
+                if iter % interval == 0:
+                    end = time.time()
+                    logger.info(f"{iter} examples processed. - {(end-start):.2f}s/{interval}expl")
+                    start = time.time()
+            return examples
+        
+        for dataset in all_datasets:
+            _ = dataset.map(
+                tokenize_function,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=False,
+                desc="Running tokenizer on dataset line_by_line",
+            )
+    else:
+        for text in data:
+            text = f"{bos} {text.strip()} {sep}"
+            token_ids = tokenizer.encode(text, add_special_tokens=False)
+            rslt.append(token_ids)
 
-        iter += 1
-        if iter % interval == 0:
-            end = time.time()
-            logger.info(f"{iter} examples processed. - {(end-start):.2f}s/{interval}expl")
-            start = time.time()
+            iter += 1
+            if iter % interval == 0:
+                end = time.time()
+                logger.info(f"{iter} examples processed. - {(end-start):.2f}s/{interval}expl")
+                start = time.time()
     logger.info("Finished binarization")
     logger.info(f"{len(data)} examples processed.")
 
