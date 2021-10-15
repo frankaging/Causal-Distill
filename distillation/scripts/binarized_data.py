@@ -39,7 +39,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Preprocess the data to avoid re-doing it several times by (tokenization + token_to_ids)."
     )
-    parser.add_argument("--file_path", type=str, default="../../bert-mid-tuning/data-files/wikitext-15M", help="The path to the data.")
+    parser.add_argument("--file_path", type=str, default=None, help="The path to the data.")
+    parser.add_argument("--dataset_name", type=str, default=None, help="The path to the data.")
     parser.add_argument("--cache_dir", type=str, default="tmp/", help="The path to the data.")
     parser.add_argument("--split", type=str, default="train", help="The split to parse.")
     parser.add_argument("--field_name", type=str, default="text", help="The field name of the column to parse.")
@@ -48,6 +49,10 @@ def main():
     parser.add_argument("--tokenizer_name", type=str, default="bert-base-uncased", help="The tokenizer to use.")
     parser.add_argument("--dump_file", type=str, default="data/dump", help="The dump file prefix.")
     args = parser.parse_args()
+    
+    # you need to at least, and only one, specify one of them.
+    assert args.file_path is not None or args.dataset_name is not None
+    assert (args.file_path is not None and args.dataset_name is not None) == False
 
     logger.info(f"Loading Tokenizer ({args.tokenizer_name})")
     if args.tokenizer_type == "bert":
@@ -72,15 +77,35 @@ def main():
         bos = tokenizer.special_tokens_map["bos_token"]  # `<|endoftext|>`
         sep = tokenizer.special_tokens_map["eos_token"]  # `<|endoftext|>`
 
-    logger.info(f"Loading text from {args.file_path}")
     # note that it has to be in the huggingface nature data file.
-    datasets = DatasetDict.load_from_disk(args.file_path)
+    all_datasets = []
+    if args.file_path is not None:
+        logger.info(f"Loading text from {args.file_path}")
+        datasets = DatasetDict.load_from_disk(args.file_path)
+        all_datasets += [datasets]
+    elif args.dataset_name is not None:
+        for dataset_n in args.dataset_name.split("+"):
+            logger.info(f"Loading text from {dataset_n}")
+            if dataset_n == "wikitext":
+                datasets = load_dataset(
+                    "wikitext", "wikitext-103-v1",
+                    cache_dir=args.cache_dir
+                )
+            else:
+                datasets = load_dataset(
+                    dataset_n,
+                    cache_dir=args.cache_dir
+                )
+            all_datasets += [datasets]
+    else:
+        assert False
     data = []
-    for text in datasets[args.split]:
-        if args.max_parsing_example != -1:
-            if len(data) == args.max_parsing_example:
-                break
-        data += [text[args.field_name]]
+    for dataset in all_datasets:
+        for text in dataset[args.split]:
+            if args.max_parsing_example != -1:
+                if len(data) == args.max_parsing_example:
+                    break
+            data += [text[args.field_name]]
 
     logger.info("Start encoding")
     logger.info(f"{len(data)} examples to process.")
