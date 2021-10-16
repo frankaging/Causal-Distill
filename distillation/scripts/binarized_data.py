@@ -122,6 +122,7 @@ def main():
             token_ids = tokenizer.encode(
                 examples[text_column_name], add_special_tokens=False
             )
+            print(token_ids)
             batch_size = token_ids.shape[0]
             for i in range(batch_size):
                 rslt.append(token_ids[i])
