@@ -119,12 +119,16 @@ def main():
         # When using line_by_line, we just tokenize each nonempty line.
         text_column_name = args.field_name
         def tokenize_function(examples):
-            print(examples)
-            token_ids = tokenizer.encode(
-                examples[text_column_name], add_special_tokens=False
-            )
-            print(token_ids)
-            batch_size = token_ids.shape[0]
+            token_ids = tokenizer(
+                examples["text"], 
+                return_token_type_ids=False,
+                return_attention_mask=False,
+                return_overflowing_tokens=False,
+                return_special_tokens_mask=False,
+                return_offsets_mapping=False,
+                return_length=False,
+            )["input_ids"]
+            batch_size = len(token_ids)
             for i in range(batch_size):
                 rslt.append(token_ids[i])
                 iter += 1
