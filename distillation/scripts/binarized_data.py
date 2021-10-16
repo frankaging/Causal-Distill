@@ -133,7 +133,7 @@ def main():
             return examples
         
         for dataset in all_datasets:
-            _ = dataset.map(
+            _ = dataset[args.split].map(
                 tokenize_function,
                 batched=True,
                 num_proc=args.preprocessing_num_workers,
