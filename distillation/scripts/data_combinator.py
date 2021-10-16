@@ -26,20 +26,25 @@ def main():
     )
     parser.add_argument("--file_path_left", type=str, default=None, help="The path to the data.")
     parser.add_argument("--file_path_right", type=str, default=None, help="The path to the data.")
-    parser.add_argument("--dump_file", type=str, default=None, help="The path to the data.")
     parser.add_argument("--tokenizer_name", type=str, default="bert-base-uncased", help="The tokenizer to use.")
     parser.add_argument("--dump_file", type=str, default="data/dump", help="The dump file prefix.")
     parser.add_argument("--split", type=str, default="train", help="The split to parse.")
     
     args = parser.parse_args()
     
-    data_left = pickle.load(open(args.file_path_left,"rb"), protocol=pickle.HIGHEST_PROTOCOL)
-    data_right = pickle.load(open(args.file_path_right,"rb"), protocol=pickle.HIGHEST_PROTOCOL)
-    
+    data_left = pickle.load(open(args.file_path_left,"rb"))
+    logger.info(f"Finish loading file {args.file_path_left}")
+    data_right = pickle.load(open(args.file_path_right,"rb"))
+    logger.info(f"Finish loading file {args.file_path_right}")
+
     for example in data_right:
         data_left.append(example)
     
     dp_file = f"{args.dump_file}.{args.split}.{args.tokenizer_name}.pickle"
-    
+    random.shuffle(data_left)
+    logger.info(f"Dump to {dp_file}")
+    with open(dp_file, "wb") as handle:
+        pickle.dump(data_left, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
 if __name__ == "__main__":
     main()
