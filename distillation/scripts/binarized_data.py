@@ -117,7 +117,6 @@ def main():
     if args.fast_process:
         logger.info(f"We will use multi-processing to process the datasets.")
         # When using line_by_line, we just tokenize each nonempty line.
-        padding = "max_length" if data_args.pad_to_max_length else False
         text_column_name = args.split
         def tokenize_function(examples):
             token_ids = tokenizer.encode(
