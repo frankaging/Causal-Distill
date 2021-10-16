@@ -142,9 +142,16 @@ def main():
                 load_from_cache_file=False,
                 desc="Running tokenizer on dataset line_by_line",
             )
+            iter = 0
+            logger.info(f"Writing to memory.")
             for example in tokenize_dataset:
                 input_ids = example["input_ids"]
                 rslt.append(input_ids)
+                iter += 1
+                if iter % interval == 0:
+                    end = time.time()
+                    logger.info(f"{iter} examples processed. - {(end-start):.2f}s/{interval}expl")
+                    start = time.time()
             dataset_index += 1
     else:
         data = []
@@ -165,8 +172,9 @@ def main():
                 end = time.time()
                 logger.info(f"{iter} examples processed. - {(end-start):.2f}s/{interval}expl")
                 start = time.time()
+    
     logger.info("Finished binarization")
-    logger.info(f"{len(data)} examples processed.")
+    logger.info(f"{len(rslt)} examples processed.")
 
     dp_file = f"{args.dump_file}.{args.split}.{args.tokenizer_name}.pickle"
     vocab_size = tokenizer.vocab_size
