@@ -117,7 +117,7 @@ def main():
     if args.fast_process:
         logger.info(f"We will use multi-processing to process the datasets.")
         # When using line_by_line, we just tokenize each nonempty line.
-        text_column_name = args.split
+        text_column_name = args.field_name
         def tokenize_function(examples):
             token_ids = tokenizer.encode(
                 examples[text_column_name], add_special_tokens=False
