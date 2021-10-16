@@ -107,13 +107,6 @@ def main():
             all_datasets += [datasets]
     else:
         assert False
-    data = []
-    for dataset in all_datasets:
-        for text in dataset[args.split]:
-            if args.max_parsing_example != -1:
-                if len(data) == args.max_parsing_example:
-                    break
-            data += [text[args.field_name]]
 
     logger.info("Start encoding")
     logger.info(f"{len(data)} examples to process.")
@@ -150,6 +143,14 @@ def main():
                 desc="Running tokenizer on dataset line_by_line",
             )
     else:
+        data = []
+        for dataset in all_datasets:
+            for text in dataset[args.split]:
+                if args.max_parsing_example != -1:
+                    if len(data) == args.max_parsing_example:
+                        break
+                data += [text[args.field_name]]
+        
         for text in data:
             text = f"{bos} {text.strip()} {sep}"
             token_ids = tokenizer.encode(text, add_special_tokens=False)
