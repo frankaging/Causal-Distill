@@ -136,7 +136,7 @@ def main():
             _ = dataset.map(
                 tokenize_function,
                 batched=True,
-                num_proc=data_args.preprocessing_num_workers,
+                num_proc=args.preprocessing_num_workers,
                 load_from_cache_file=False,
                 desc="Running tokenizer on dataset line_by_line",
             )
