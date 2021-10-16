@@ -109,7 +109,6 @@ def main():
         assert False
 
     logger.info("Start encoding")
-    logger.info(f"{len(data)} examples to process.")
 
     rslt = []
     iter = 0
@@ -150,7 +149,7 @@ def main():
                     if len(data) == args.max_parsing_example:
                         break
                 data += [text[args.field_name]]
-        
+        logger.info(f"{len(data)} examples to process.")
         for text in data:
             text = f"{bos} {text.strip()} {sep}"
             token_ids = tokenizer.encode(text, add_special_tokens=False)
