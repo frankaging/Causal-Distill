@@ -119,6 +119,7 @@ def main():
         # When using line_by_line, we just tokenize each nonempty line.
         text_column_name = args.field_name
         def tokenize_function(examples):
+            print(examples)
             token_ids = tokenizer.encode(
                 examples[text_column_name], add_special_tokens=False
             )
