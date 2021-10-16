@@ -87,12 +87,14 @@ def main():
 
     # note that it has to be in the huggingface nature data file.
     all_datasets = []
+    dataset_names = []
     if args.file_path is not None:
         logger.info(f"Loading text from {args.file_path}")
         datasets = DatasetDict.load_from_disk(args.file_path)
         all_datasets += [datasets]
     elif args.dataset_name is not None:
         for dataset_n in args.dataset_name.split("+"):
+            dataset_names += [dataset_n]
             logger.info(f"Loading text from {dataset_n}")
             if dataset_n == "wikitext":
                 datasets = load_dataset(
@@ -127,25 +129,23 @@ def main():
                 return_special_tokens_mask=False,
                 return_offsets_mapping=False,
                 return_length=False,
-            )["input_ids"]
-            batch_size = len(token_ids)
-            for i in range(batch_size):
-                rslt.append(token_ids[i])
-                iter += 1
-                if iter % interval == 0:
-                    end = time.time()
-                    logger.info(f"{iter} examples processed. - {(end-start):.2f}s/{interval}expl")
-                    start = time.time()
-            return examples
+            )
+            return token_ids
         
+        dataset_index = 0
         for dataset in all_datasets:
-            _ = dataset[args.split].map(
+            logger.info(f"Multiprocessing dataset = {dataset_names[dataset_index]}.")
+            tokenize_dataset = dataset[args.split].map(
                 tokenize_function,
                 batched=True,
                 num_proc=args.preprocessing_num_workers,
                 load_from_cache_file=False,
                 desc="Running tokenizer on dataset line_by_line",
             )
+            for example in tokenize_dataset:
+                input_ids = example["input_ids"]
+                rslt.append(input_ids)
+            dataset_index += 1
     else:
         data = []
         for dataset in all_datasets:
