@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[ ]:
 
 
 # coding=utf-8
@@ -59,7 +59,7 @@ MODEL_CLASSES = {
 }
 
 
-# In[2]:
+# In[ ]:
 
 
 def sanity_checks(args):
@@ -218,7 +218,7 @@ def prepare_distiller(args):
     return distiller
 
 
-# In[3]:
+# In[ ]:
 
 
 if __name__ == "__main__":
@@ -408,7 +408,8 @@ if __name__ == "__main__":
     
     # config the runname here and overwrite.
     data_name = args.data_file.split("/")[-2]
-    run_name = f"s_{args.student_type}_t_{args.teacher_type}_data_{data_name}_seed_{args.seed}_mlm_{args.mlm}_ce_{args.alpha_ce}_mlm_{args.alpha_mlm}_cos_{args.alpha_cos}_causal_{args.alpha_causal}"
+    neuron_mapping = args.neuron_mapping.split("/")[-1].split(".")[0]
+    run_name = f"s_{args.student_type}_t_{args.teacher_type}_data_{data_name}_seed_{args.seed}_mlm_{args.mlm}_ce_{args.alpha_ce}_mlm_{args.alpha_mlm}_cos_{args.alpha_cos}_causal_{args.alpha_causal}_nm_{neuron_mapping}"
     args.run_name = run_name
     args.dump_path = os.path.join(args.dump_path, args.run_name)
     sanity_checks(args)
