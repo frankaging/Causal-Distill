@@ -346,10 +346,10 @@ class Transformer(nn.Module):
                     # TODO: we also need to consider the position.
                     batch_size = hidden_state.shape[0]
                     for j in range(batch_size):
-                        s = sampled_interchange_position[i][0]
-                        e = sampled_interchange_position[i][1]
-                        d_s = sampled_interchange_position[i][2]
-                        d_e = sampled_interchange_position[i][3]
+                        s = sampled_interchange_position[j][0]
+                        e = sampled_interchange_position[j][1]
+                        d_s = sampled_interchange_position[j][2]
+                        d_e = sampled_interchange_position[j][3]
                         hidden_state[j,s:e,start_index:stop_index] = interchanged_activations[j,d_s:d_e,:]
             if output_attentions:
                 assert len(layer_outputs) == 2

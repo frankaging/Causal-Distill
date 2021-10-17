@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
+# In[1]:
 
 
 # coding=utf-8
@@ -59,7 +59,7 @@ MODEL_CLASSES = {
 }
 
 
-# In[ ]:
+# In[2]:
 
 
 def sanity_checks(args):
@@ -218,7 +218,7 @@ def prepare_distiller(args):
     return distiller
 
 
-# In[ ]:
+# In[3]:
 
 
 if __name__ == "__main__":
@@ -396,7 +396,7 @@ if __name__ == "__main__":
             n_gpu=0,
             is_wandb=False,
             log_interval=10,
-            neuron_mapping="./training_configs/neuron_mapping.json",
+            neuron_mapping="./training_configs/single_middle.nm",
             local_rank=-1,
             interchange_prop=0.3
         )

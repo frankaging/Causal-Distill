@@ -643,17 +643,20 @@ class CausalDistiller:
         # measure the efficacy of the interchange.
         teacher_interchange_efficacy = (
             self.ce_loss_fct(
-                nn.functional.log_softmax(causal_t_logits_slct, dim=-1),
-                nn.functional.softmax(t_logits_slct, dim=-1),
+                nn.functional.log_softmax(causal_t_logits_slct / self.temperature, dim=-1),
+                nn.functional.softmax(t_logits_slct / self.temperature, dim=-1),
             )
+            * (self.temperature) ** 2
         )
+        
         student_interchange_efficacy = (
             self.ce_loss_fct(
-                nn.functional.log_softmax(causal_s_logits_slct, dim=-1),
-                nn.functional.softmax(s_logits_slct, dim=-1),
+                nn.functional.log_softmax(causal_s_logits_slct / self.temperature, dim=-1),
+                nn.functional.softmax(s_logits_slct / self.temperature, dim=-1),
             )
+            * (self.temperature) ** 2
         )
-
+        
         causal_loss_ce = (
             self.ce_loss_fct(
                 nn.functional.log_softmax(causal_s_logits_slct / self.temperature, dim=-1),
@@ -799,12 +802,13 @@ class CausalDistiller:
 
         if self.is_master:
             self.save_checkpoint(checkpoint_name=f"model_epoch_{self.epoch}.pth")
-            wandb.log(
-                {
-                    "epoch/loss": self.total_loss_epoch / self.n_iter, 
-                    'epoch': self.epoch
-                }
-            )
+            if self.is_wandb:
+                wandb.log(
+                    {
+                        "epoch/loss": self.total_loss_epoch / self.n_iter, 
+                        'epoch': self.epoch
+                    }
+                )
 
         self.epoch += 1
         self.n_sequences_epoch = 0
