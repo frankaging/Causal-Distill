@@ -36,7 +36,6 @@ from causal_distiller import *
 from lm_seqs_dataset import LmSeqsDataset
 from transformers import (
     BertConfig,
-    BertForMaskedLM,
     BertTokenizer,
     DistilBertConfig,
     DistilBertTokenizer,
@@ -48,6 +47,7 @@ from transformers import (
     RobertaTokenizer,
 )
 from models.modeling_distilbert import DistilBertForMaskedLM # we need to customize it a little.
+from models.modeling_bert import BertForMaskedLM # we need to customize it a little.
 from utils import git_log, init_gpu_params, logger, set_seed
 
 
@@ -182,9 +182,6 @@ def prepare_distiller(args):
         )
     else:
         student = student_model_class(stu_architecture_config)
-
-    if args.n_gpu > 0:
-        student.to(torch.device("cuda")) # no rank is needed!
     logger.info("Student loaded.")
 
     # TEACHER #
@@ -192,8 +189,7 @@ def prepare_distiller(args):
         args.teacher_name, output_hidden_states=True, 
         cache_dir=args.cache_dir
     )
-    if args.n_gpu > 0:
-        teacher.to(torch.device("cuda")) # no rank is needed!
+
     logger.info(f"Teacher loaded from {args.teacher_name}.")
 
     # FREEZING #
@@ -396,9 +392,11 @@ if __name__ == "__main__":
             n_gpu=0,
             is_wandb=False,
             log_interval=10,
-            neuron_mapping="./training_configs/single_middle.nm",
+            neuron_mapping="./training_configs/single_multilayer.nm",
             local_rank=-1,
-            interchange_prop=0.3
+            interchange_prop=0.3,
+            batch_size=5,
+            gradient_accumulation_steps=50,
         )
         print("Prelude: running in notebook for testing only.")
         args = parser.parse_args([])

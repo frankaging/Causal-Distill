@@ -252,10 +252,14 @@ class CausalDistiller:
                 self.student = DistributedDataParallel(self.student)
             else:
                 if params.local_rank == -1:
-                    logger.info("Using nn.DataParallel for parallel training.")
-                    self.student = torch.nn.DataParallel(self.student)
+                    logger.info("Using nn.DataParallel for the teacher model.")
                     # teacher also use multi-GPU.
                     self.teacher = torch.nn.DataParallel(self.teacher)
+                    self.teacher.to(torch.device("cuda")) # no rank is needed!
+
+                    logger.info("Using nn.DataParallel for the student model.")
+                    self.student = torch.nn.DataParallel(self.student)
+                    self.student.to(torch.device("cuda")) # no rank is needed!
                 else:
                 
                     from torch.nn.parallel import DistributedDataParallel
