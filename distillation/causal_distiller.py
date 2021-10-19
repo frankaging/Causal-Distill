@@ -514,74 +514,8 @@ class CausalDistiller:
         attention_mask/dual_attention_mask: `torch.tensor(bs, seq_length)` - The attention mask for self attention.
         lm_labels/dual_lm_labels: `torch.tensor(bs, seq_length)` - The language modeling labels (mlm labels for MLM and clm labels for CLM).
         """
-        if self.mlm:
-            student_outputs = self.student(
-                input_ids=input_ids, attention_mask=attention_mask
-            )  # (bs, seq_length, voc_size)
-            with torch.no_grad():
-                teacher_outputs = self.teacher(
-                    input_ids=input_ids, attention_mask=attention_mask
-                )  # (bs, seq_length, voc_size)
-        else:
-            assert False # we are not supporting this branch!
-            student_outputs = self.student(input_ids=input_ids, attention_mask=None)  # (bs, seq_length, voc_size)
-            with torch.no_grad():
-                teacher_outputs = self.teacher(input_ids=input_ids, attention_mask=None)  # (bs, seq_length, voc_size)
-        s_logits, s_hidden_states = student_outputs["logits"], student_outputs["hidden_states"]
-        t_logits, t_hidden_states = teacher_outputs["logits"], teacher_outputs["hidden_states"]
-        assert s_logits.size() == t_logits.size()
-
-        # https://github.com/peterliht/knowledge-distillation-pytorch/blob/master/model/net.py#L100
-        # https://github.com/peterliht/knowledge-distillation-pytorch/issues/2
-        if self.params.restrict_ce_to_mask:
-            mask = (lm_labels > -1).unsqueeze(-1).expand_as(s_logits)  # (bs, seq_length, voc_size)
-        else:
-            mask = attention_mask.unsqueeze(-1).expand_as(s_logits)  # (bs, seq_length, voc_size)
-        s_logits_slct = torch.masked_select(s_logits, mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
-        s_logits_slct = s_logits_slct.view(-1, s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
-        t_logits_slct = torch.masked_select(t_logits, mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
-        t_logits_slct = t_logits_slct.view(-1, s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
-        assert t_logits_slct.size() == s_logits_slct.size()
-
-        loss_ce = (
-            self.ce_loss_fct(
-                nn.functional.log_softmax(s_logits_slct / self.temperature, dim=-1),
-                nn.functional.softmax(t_logits_slct / self.temperature, dim=-1),
-            )
-            * (self.temperature) ** 2
-        )
-        loss = self.alpha_ce * loss_ce
-
-        if self.alpha_mlm > 0.0:
-            loss_mlm = self.lm_loss_fct(s_logits.view(-1, s_logits.size(-1)), lm_labels.view(-1))
-            loss += self.alpha_mlm * loss_mlm
-        if self.alpha_clm > 0.0:
-            shift_logits = s_logits[..., :-1, :].contiguous()
-            shift_labels = lm_labels[..., 1:].contiguous()
-            loss_clm = self.lm_loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-            loss += self.alpha_clm * loss_clm
-
-        if self.alpha_mse > 0.0:
-            loss_mse = self.mse_loss_fct(s_logits_slct, t_logits_slct) / s_logits_slct.size(
-                0
-            )  # Reproducing batchmean reduction
-            loss += self.alpha_mse * loss_mse
-        if self.alpha_cos > 0.0:
-            s_hidden_states = s_hidden_states[-1]  # (bs, seq_length, dim)
-            t_hidden_states = t_hidden_states[-1]  # (bs, seq_length, dim)
-            mask = attention_mask.unsqueeze(-1).expand_as(s_hidden_states)  # (bs, seq_length, dim)
-            assert s_hidden_states.size() == t_hidden_states.size()
-            dim = s_hidden_states.size(-1)
-
-            s_hidden_states_slct = torch.masked_select(s_hidden_states, mask)  # (bs * seq_length * dim)
-            s_hidden_states_slct = s_hidden_states_slct.view(-1, dim)  # (bs * seq_length, dim)
-            t_hidden_states_slct = torch.masked_select(t_hidden_states, mask)  # (bs * seq_length * dim)
-            t_hidden_states_slct = t_hidden_states_slct.view(-1, dim)  # (bs * seq_length, dim)
-
-            target = s_hidden_states_slct.new(s_hidden_states_slct.size(0)).fill_(1)  # (bs * seq_length,)
-            loss_cos = self.cosine_loss_fct(s_hidden_states_slct, t_hidden_states_slct, target)
-            loss += self.alpha_cos * loss_cos
         
+        # preparing for causal distillation.
         # we randomly select the pool of neurons to interchange.
         selector = random.randint(0, len(self.deserialized_interchange_variable_mappings)-1)
         interchange_variable_mapping = self.deserialized_interchange_variable_mappings[selector]
@@ -602,23 +536,64 @@ class CausalDistiller:
                 student_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
             else:
                 student_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
-
-        with torch.no_grad():
-            counterfactual_activations_teacher = get_activation_at(
-                self.teacher,
-                dual_input_ids, # this is different!
-                dual_attention_mask, # this is different!
-                variable_names=teacher_variable_names
-            )
-            counterfactual_outputs_teacher = self.teacher(
-                input_ids=input_ids, # this is different!
-                attention_mask=attention_mask, # this is different!
-                interchanged_variables=counterfactual_activations_teacher,
-                variable_names=teacher_interchanged_variables_mapping,
-                sampled_interchange_position=sampled_interchange_position,
-            )
         
-        # we need to get causal distillation loss!
+        if self.mlm:
+            with torch.no_grad():
+                # teacher forward pass normal.
+                teacher_outputs = self.teacher(
+                    input_ids=input_ids, attention_mask=attention_mask
+                )  # (bs, seq_length, voc_size)
+                # teacher forward pass for interchange variables.
+                counterfactual_activations_teacher = get_activation_at(
+                    self.teacher,
+                    dual_input_ids, # this is different!
+                    dual_attention_mask, # this is different!
+                    variable_names=teacher_variable_names
+                )
+                # teacher forward pass for interchanged outputs.
+                counterfactual_outputs_teacher = self.teacher(
+                    input_ids=input_ids, # this is different!
+                    attention_mask=attention_mask, # this is different!
+                    interchanged_variables=counterfactual_activations_teacher,
+                    variable_names=teacher_interchanged_variables_mapping,
+                    sampled_interchange_position=sampled_interchange_position,
+                )    
+            t_logits, t_hidden_states = teacher_outputs["logits"], teacher_outputs["hidden_states"]
+            student_outputs = self.student(
+                input_ids=input_ids, attention_mask=attention_mask,
+                t_logits=t_logits,
+                t_hidden_states=t_hidden_states,
+                temperature=self.temperature,
+                restrict_ce_to_mask=self.params.restrict_ce_to_mask,
+                lm_labels=lm_labels,
+                alpha_mlm=self.alpha_mlm,
+                alpha_clm=self.alpha_clm,
+                alpha_mse=self.alpha_mse,
+                alpha_cos=self.alpha_cos,
+            )  # (bs, seq_length, voc_size)
+            s_logits, s_hidden_states = student_outputs["logits"], student_outputs["hidden_states"]
+            causal_t_logits, causal_t_hidden_states = \
+                counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
+        else:
+            assert False # we are not supporting this branch!
+        
+        # standard losses.
+        loss_ce = student_outputs["loss_ce"].mean() if self.multi_gpu else student_outputs["loss_ce"]
+        loss = self.alpha_ce * loss_ce
+        if self.alpha_mlm > 0.0:
+            loss_mlm = student_outputs["loss_mlm"].mean() if self.multi_gpu else student_outputs["loss_mlm"]
+            loss += self.alpha_mlm * loss_mlm
+        if self.alpha_clm > 0.0:
+            loss_clm = student_outputs["loss_clm"].mean() if self.multi_gpu else student_outputs["loss_clm"]
+            loss += self.alpha_clm * loss_clm
+        if self.alpha_mse > 0.0:
+            loss_mse = student_outputs["loss_mse"].mean() if self.multi_gpu else student_outputs["loss_mse"]
+            loss += self.alpha_mse * loss_mse
+        if self.alpha_cos > 0.0:
+            loss_cos = student_outputs["loss_cos"].mean() if self.multi_gpu else student_outputs["loss_cos"]
+            loss += self.alpha_cos * loss_cos
+
+       # we need to get causal distillation loss!
         counterfactual_activations_student = get_activation_at(
             self.student,
             dual_input_ids, # this is different!
@@ -628,54 +603,29 @@ class CausalDistiller:
         counterfactual_outputs_student = self.student(
             input_ids=input_ids, # this is different!
             attention_mask=attention_mask, # this is different!
+            # interchange.
             interchanged_variables=counterfactual_activations_student,
             variable_names=student_interchanged_variables_mapping,
             sampled_interchange_position=sampled_interchange_position,
+            # loss.
+            t_logits=t_logits,
+            t_hidden_states=t_hidden_states,
+            causal_t_logits=causal_t_logits,
+            causal_t_hidden_states=causal_t_hidden_states,
+            s_logits=s_logits,
+            s_hidden_states=s_hidden_states,
+            temperature=self.temperature,
+            restrict_ce_to_mask=self.params.restrict_ce_to_mask,
         )
-        # similiar to mlm, we need to do some post-processing!
-        causal_s_logits, causal_s_hidden_states = \
-            counterfactual_outputs_student["logits"], counterfactual_outputs_student["hidden_states"]
-        causal_t_logits, causal_t_hidden_states = \
-            counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
-        assert causal_s_logits.size() == causal_t_logits.size()
-        # calculate the loss!
-
-        # https://github.com/peterliht/knowledge-distillation-pytorch/blob/master/model/net.py#L100
-        # https://github.com/peterliht/knowledge-distillation-pytorch/issues/2
-        if self.params.restrict_ce_to_mask:
-            causal_mask = (lm_labels > -1).unsqueeze(-1).expand_as(causal_s_logits)  # (bs, seq_length, voc_size)
-        else:
-            causal_mask = attention_mask.unsqueeze(-1).expand_as(causal_s_logits)  # (bs, seq_length, voc_size)
-        causal_s_logits_slct = torch.masked_select(causal_s_logits, causal_mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
-        causal_s_logits_slct = causal_s_logits_slct.view(-1, causal_s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
-        causal_t_logits_slct = torch.masked_select(causal_t_logits, causal_mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
-        causal_t_logits_slct = causal_t_logits_slct.view(-1, causal_s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
-        assert causal_t_logits_slct.size() == causal_s_logits_slct.size()
-        
-        # measure the efficacy of the interchange.
-        teacher_interchange_efficacy = (
-            self.ce_loss_fct(
-                nn.functional.log_softmax(causal_t_logits_slct / self.temperature, dim=-1),
-                nn.functional.softmax(t_logits_slct / self.temperature, dim=-1),
-            )
-            * (self.temperature) ** 2
-        )
-        
-        student_interchange_efficacy = (
-            self.ce_loss_fct(
-                nn.functional.log_softmax(causal_s_logits_slct / self.temperature, dim=-1),
-                nn.functional.softmax(s_logits_slct / self.temperature, dim=-1),
-            )
-            * (self.temperature) ** 2
-        )
-        
-        causal_loss_ce = (
-            self.ce_loss_fct(
-                nn.functional.log_softmax(causal_s_logits_slct / self.temperature, dim=-1),
-                nn.functional.softmax(causal_t_logits_slct / self.temperature, dim=-1),
-            )
-            * (self.temperature) ** 2
-        )
+        # sanity check.
+        assert "loss_ce" not in counterfactual_outputs_student
+        assert "loss_mlm" not in counterfactual_outputs_student
+        assert "loss_clm" not in counterfactual_outputs_student
+        assert "loss_mse" not in counterfactual_outputs_student
+        assert "loss_cos" not in counterfactual_outputs_student
+        causal_loss_ce = counterfactual_outputs_student["causal_loss_ce"].mean() if self.multi_gpu else counterfactual_outputs_student["causal_loss_ce"]
+        teacher_interchange_efficacy = counterfactual_outputs_student["teacher_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["teacher_interchange_efficacy"]
+        student_interchange_efficacy = counterfactual_outputs_student["student_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["student_interchange_efficacy"]
         if self.alpha_causal > 0.0:
             loss += self.alpha_causal * causal_loss_ce
                 

@@ -603,6 +603,13 @@ class DistilBertForMaskedLM(DistilBertPreTrainedModel):
         self.init_weights()
 
         self.mlm_loss_fct = nn.CrossEntropyLoss()
+        
+        # we actually calculate loss here so that it is parallel.
+        self.ce_loss_fct = nn.KLDivLoss(reduction="batchmean")
+        self.lm_loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+        self.mse_loss_fct = nn.MSELoss(reduction="sum")
+        self.cosine_loss_fct = nn.CosineEmbeddingLoss(reduction="mean")
+
 
     def get_position_embeddings(self) -> nn.Embedding:
         """
@@ -652,6 +659,20 @@ class DistilBertForMaskedLM(DistilBertPreTrainedModel):
         interchanged_variables=None, 
         variable_names=None,
         sampled_interchange_position=None,
+        # for calculating the losses.
+        t_logits=None,
+        t_hidden_states=None,
+        causal_t_logits=None,
+        causal_t_hidden_states=None,
+        s_logits=None,
+        s_hidden_states=None,
+        temperature=None,
+        restrict_ce_to_mask=None,
+        lm_labels=None,
+        alpha_mlm=0.0,
+        alpha_clm=0.0,
+        alpha_mse=0.0,
+        alpha_cos=0.0,
     ):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
@@ -686,13 +707,136 @@ class DistilBertForMaskedLM(DistilBertPreTrainedModel):
         if not return_dict:
             output = (prediction_logits,) + dlbrt_output[1:]
             return ((mlm_loss,) + output) if mlm_loss is not None else output
-
-        return MaskedLMOutput(
+        
+        student_outputs = MaskedLMOutput(
             loss=mlm_loss,
             logits=prediction_logits,
             hidden_states=dlbrt_output.hidden_states,
             attentions=dlbrt_output.attentions,
         )
+
+        if causal_t_logits is None:
+            # if it is None, it is simply a forward for getting hidden states!
+            if t_logits is not None:
+                assert t_hidden_states is not None
+                # regular loss
+                s_logits, s_hidden_states = student_outputs["logits"], student_outputs["hidden_states"]
+                assert s_logits.size() == t_logits.size()
+                # https://github.com/peterliht/knowledge-distillation-pytorch/blob/master/model/net.py#L100
+                # https://github.com/peterliht/knowledge-distillation-pytorch/issues/2
+                if restrict_ce_to_mask:
+                    mask = (lm_labels > -1).unsqueeze(-1).expand_as(s_logits)  # (bs, seq_length, voc_size)
+                else:
+                    mask = attention_mask.unsqueeze(-1).expand_as(s_logits)  # (bs, seq_length, voc_size)
+                s_logits_slct = torch.masked_select(s_logits, mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
+                s_logits_slct = s_logits_slct.view(-1, s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
+                t_logits_slct = torch.masked_select(t_logits, mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
+                t_logits_slct = t_logits_slct.view(-1, s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
+                assert t_logits_slct.size() == s_logits_slct.size()
+
+                loss_ce = (
+                    self.ce_loss_fct(
+                        nn.functional.log_softmax(s_logits_slct / temperature, dim=-1),
+                        nn.functional.softmax(t_logits_slct / temperature, dim=-1),
+                    )
+                    * (temperature) ** 2
+                )
+                student_outputs["loss_ce"] = loss_ce
+
+                # other distillation loss.
+                if alpha_mlm > 0.0:
+                    loss_mlm = self.lm_loss_fct(s_logits.view(-1, s_logits.size(-1)), lm_labels.view(-1))
+                    student_outputs["loss_mlm"] = loss_mlm
+                if alpha_clm > 0.0:
+                    shift_logits = s_logits[..., :-1, :].contiguous()
+                    shift_labels = lm_labels[..., 1:].contiguous()
+                    loss_clm = self.lm_loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                    student_outputs["loss_mlm"] = loss_clm
+                if alpha_mse > 0.0:
+                    loss_mse = self.mse_loss_fct(s_logits_slct, t_logits_slct) / s_logits_slct.size(
+                        0
+                    )  # Reproducing batchmean reduction
+                    student_outputs["loss_mse"] = loss_mse
+                if alpha_cos > 0.0:
+                    s_hidden_states = s_hidden_states[-1]  # (bs, seq_length, dim)
+                    t_hidden_states = t_hidden_states[-1]  # (bs, seq_length, dim)
+                    mask = attention_mask.unsqueeze(-1).expand_as(s_hidden_states)  # (bs, seq_length, dim)
+                    assert s_hidden_states.size() == t_hidden_states.size()
+                    dim = s_hidden_states.size(-1)
+
+                    s_hidden_states_slct = torch.masked_select(s_hidden_states, mask)  # (bs * seq_length * dim)
+                    s_hidden_states_slct = s_hidden_states_slct.view(-1, dim)  # (bs * seq_length, dim)
+                    t_hidden_states_slct = torch.masked_select(t_hidden_states, mask)  # (bs * seq_length * dim)
+                    t_hidden_states_slct = t_hidden_states_slct.view(-1, dim)  # (bs * seq_length, dim)
+
+                    target = s_hidden_states_slct.new(s_hidden_states_slct.size(0)).fill_(1)  # (bs * seq_length,)
+                    loss_cos = self.cosine_loss_fct(s_hidden_states_slct, t_hidden_states_slct, target)
+                    student_outputs["loss_cos"] = loss_cos
+        # causal distillation loss.
+        else:
+            # if it is None, it is simply a forward for getting hidden states!
+            assert t_logits is not None
+            assert t_hidden_states is not None
+            assert s_logits is not None
+            assert s_hidden_states is not None
+
+            assert s_logits.size() == t_logits.size()
+            # https://github.com/peterliht/knowledge-distillation-pytorch/blob/master/model/net.py#L100
+            # https://github.com/peterliht/knowledge-distillation-pytorch/issues/2
+            if restrict_ce_to_mask:
+                mask = (lm_labels > -1).unsqueeze(-1).expand_as(s_logits)  # (bs, seq_length, voc_size)
+            else:
+                mask = attention_mask.unsqueeze(-1).expand_as(s_logits)  # (bs, seq_length, voc_size)
+            s_logits_slct = torch.masked_select(s_logits, mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
+            s_logits_slct = s_logits_slct.view(-1, s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
+            t_logits_slct = torch.masked_select(t_logits, mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
+            t_logits_slct = t_logits_slct.view(-1, s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
+            assert t_logits_slct.size() == s_logits_slct.size()
+            
+            assert causal_t_hidden_states is not None
+            causal_s_logits, causal_s_hidden_states = \
+                student_outputs["logits"], student_outputs["hidden_states"]
+            assert causal_s_logits.size() == causal_t_logits.size()
+            # https://github.com/peterliht/knowledge-distillation-pytorch/blob/master/model/net.py#L100
+            # https://github.com/peterliht/knowledge-distillation-pytorch/issues/2
+            if restrict_ce_to_mask:
+                causal_mask = (lm_labels > -1).unsqueeze(-1).expand_as(causal_s_logits)  # (bs, seq_length, voc_size)
+            else:
+                causal_mask = attention_mask.unsqueeze(-1).expand_as(causal_s_logits)  # (bs, seq_length, voc_size)
+            causal_s_logits_slct = torch.masked_select(causal_s_logits, causal_mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
+            causal_s_logits_slct = causal_s_logits_slct.view(-1, causal_s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
+            causal_t_logits_slct = torch.masked_select(causal_t_logits, causal_mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
+            causal_t_logits_slct = causal_t_logits_slct.view(-1, causal_s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
+            assert causal_t_logits_slct.size() == causal_s_logits_slct.size()
+            
+            # measure the efficacy of the interchange.
+            teacher_interchange_efficacy = (
+                self.ce_loss_fct(
+                    nn.functional.log_softmax(causal_t_logits_slct / temperature, dim=-1),
+                    nn.functional.softmax(t_logits_slct / temperature, dim=-1),
+                )
+                * (temperature) ** 2
+            )
+
+            student_interchange_efficacy = (
+                self.ce_loss_fct(
+                    nn.functional.log_softmax(causal_s_logits_slct / temperature, dim=-1),
+                    nn.functional.softmax(s_logits_slct / temperature, dim=-1),
+                )
+                * (temperature) ** 2
+            )
+            causal_loss_ce = (
+                self.ce_loss_fct(
+                    nn.functional.log_softmax(causal_s_logits_slct / temperature, dim=-1),
+                    nn.functional.softmax(causal_t_logits_slct / temperature, dim=-1),
+                )
+                * (temperature) ** 2
+            )
+            student_outputs["causal_loss_ce"] = causal_loss_ce
+            student_outputs["teacher_interchange_efficacy"] = teacher_interchange_efficacy
+            student_outputs["student_interchange_efficacy"] = student_interchange_efficacy
+            
+        return student_outputs
 
 
 @add_start_docstrings(
