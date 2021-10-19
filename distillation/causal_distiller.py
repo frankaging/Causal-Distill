@@ -254,6 +254,8 @@ class CausalDistiller:
                 if params.local_rank == -1:
                     logger.info("Using nn.DataParallel for parallel training.")
                     self.student = torch.nn.DataParallel(self.student)
+                    # teacher also use multi-GPU.
+                    self.teacher = torch.nn.DataParallel(self.teacher)
                 else:
                 
                     from torch.nn.parallel import DistributedDataParallel
@@ -581,7 +583,22 @@ class CausalDistiller:
         interchange_variable_mapping = self.deserialized_interchange_variable_mappings[selector]
         teacher_variable_names = random.choice(interchange_variable_mapping[0])
         student_variable_names = random.choice(interchange_variable_mapping[1])
-        
+        teacher_interchanged_variables_mapping = {}
+        student_interchanged_variables_mapping = {}
+        # we need to do the interchange here.
+        for i, variable in enumerate(teacher_variable_names):
+            layer_index, head_index, LOC = parse_variable_name(variable)
+            if layer_index in teacher_interchanged_variables_mapping:
+                teacher_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
+            else:
+                teacher_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
+        for i, variable in enumerate(student_variable_names):
+            layer_index, head_index, LOC = parse_variable_name(variable)
+            if layer_index in student_interchanged_variables_mapping:
+                student_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
+            else:
+                student_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
+
         with torch.no_grad():
             counterfactual_activations_teacher = get_activation_at(
                 self.teacher,
@@ -589,12 +606,11 @@ class CausalDistiller:
                 dual_attention_mask, # this is different!
                 variable_names=teacher_variable_names
             )
-            counterfactual_outputs_teacher = interchange_with_activation_at(
-                self.teacher,
-                input_ids, # this is different!
-                attention_mask, # this is different!
+            counterfactual_outputs_teacher = self.teacher(
+                input_ids=input_ids, # this is different!
+                attention_mask=attention_mask, # this is different!
                 interchanged_variables=counterfactual_activations_teacher,
-                variable_names=teacher_variable_names,
+                variable_names=teacher_interchanged_variables_mapping,
                 sampled_interchange_position=sampled_interchange_position,
             )
         
@@ -605,19 +621,11 @@ class CausalDistiller:
             dual_attention_mask, # this is different!
             variable_names=student_variable_names
         )
-        interchanged_variables_mapping = {}
-        # we need to do the interchange here.
-        for i, variable in enumerate(student_variable_names):
-            layer_index, head_index, LOC = parse_variable_name(variable)
-            if layer_index in interchanged_variables_mapping:
-                interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
-            else:
-                interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
         counterfactual_outputs_student = self.student(
             input_ids=input_ids, # this is different!
             attention_mask=attention_mask, # this is different!
             interchanged_variables=counterfactual_activations_student,
-            variable_names=interchanged_variables_mapping,
+            variable_names=student_interchanged_variables_mapping,
             sampled_interchange_position=sampled_interchange_position,
         )
         # similiar to mlm, we need to do some post-processing!
