@@ -230,7 +230,10 @@ def main():
 
     # overwrite the output dir a little bit.
     sub_output_dir = model_args.model_name_or_path.strip("/").split("/")[-1].strip("/")
-    sub_output_dir = f"{data_args.task_name}_{sub_output_dir}"
+    if data_args.task_name not in sub_output_dir:
+        sub_output_dir = f"{data_args.task_name}_{sub_output_dir}"
+    else:
+        pass # it is already the task subdirectory!
     training_args.output_dir = os.path.join(training_args.output_dir, sub_output_dir)
     training_args.run_name = sub_output_dir
     logger.info(f"WANDB RUN NAME: {training_args.run_name}")

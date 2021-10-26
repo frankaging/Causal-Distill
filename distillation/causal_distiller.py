@@ -543,8 +543,14 @@ class CausalDistiller:
                 teacher_outputs = self.teacher(
                     input_ids=input_ids, attention_mask=attention_mask
                 )  # (bs, seq_length, voc_size)
+                # teacher forward pass normal for the dual example.
+                dual_teacher_outputs = self.teacher(
+                    input_ids=dual_input_ids, attention_mask=dual_attention_mask
+                )  # (bs, seq_length, voc_size)
+                
+                # dual on main example
                 # teacher forward pass for interchange variables.
-                counterfactual_activations_teacher = get_activation_at(
+                dual_counterfactual_activations_teacher = get_activation_at(
                     self.teacher,
                     dual_input_ids, # this is different!
                     dual_attention_mask, # this is different!
@@ -554,11 +560,31 @@ class CausalDistiller:
                 counterfactual_outputs_teacher = self.teacher(
                     input_ids=input_ids, # this is different!
                     attention_mask=attention_mask, # this is different!
+                    interchanged_variables=dual_counterfactual_activations_teacher,
+                    variable_names=teacher_interchanged_variables_mapping,
+                    sampled_interchange_position=sampled_interchange_position,
+                )   
+                
+                # main on dual example
+                # teacher forward pass for interchange variables.
+                counterfactual_activations_teacher = get_activation_at(
+                    self.teacher,
+                    input_ids, # this is different!
+                    attention_mask, # this is different!
+                    variable_names=teacher_variable_names
+                )
+                # teacher forward pass for interchanged outputs.
+                dual_counterfactual_outputs_teacher = self.teacher(
+                    input_ids=dual_input_ids, # this is different!
+                    attention_mask=dual_attention_mask, # this is different!
                     interchanged_variables=counterfactual_activations_teacher,
                     variable_names=teacher_interchanged_variables_mapping,
                     sampled_interchange_position=sampled_interchange_position,
-                )    
-            t_logits, t_hidden_states = teacher_outputs["logits"], teacher_outputs["hidden_states"]
+                )
+            t_logits, t_hidden_states = \
+                teacher_outputs["logits"], teacher_outputs["hidden_states"]
+            dual_t_logits, dual_t_hidden_states = \
+                dual_teacher_outputs["logits"], dual_teacher_outputs["hidden_states"]
             student_outputs = self.student(
                 input_ids=input_ids, attention_mask=attention_mask,
                 t_logits=t_logits,
@@ -571,40 +597,68 @@ class CausalDistiller:
                 alpha_mse=self.alpha_mse,
                 alpha_cos=self.alpha_cos,
             )  # (bs, seq_length, voc_size)
+            dual_student_outputs = self.student(
+                input_ids=dual_input_ids, attention_mask=dual_attention_mask,
+                t_logits=dual_t_logits,
+                t_hidden_states=dual_t_hidden_states,
+                temperature=self.temperature,
+                restrict_ce_to_mask=self.params.restrict_ce_to_mask,
+                lm_labels=lm_labels,
+                alpha_mlm=self.alpha_mlm,
+                alpha_clm=self.alpha_clm,
+                alpha_mse=self.alpha_mse,
+                alpha_cos=self.alpha_cos,
+            )  # (bs, seq_length, voc_size)
             s_logits, s_hidden_states = student_outputs["logits"], student_outputs["hidden_states"]
+            dual_s_logits, dual_s_hidden_states = student_outputs["logits"], student_outputs["hidden_states"]
             causal_t_logits, causal_t_hidden_states = \
+                counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
+            dual_causal_t_logits, dual_causal_t_hidden_states = \
                 counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
         else:
             assert False # we are not supporting this branch!
         
         # standard losses.
         loss_ce = student_outputs["loss_ce"].mean() if self.multi_gpu else student_outputs["loss_ce"]
+        loss_ce += dual_student_outputs["loss_ce"].mean() if self.multi_gpu else dual_student_outputs["loss_ce"]
         loss = self.alpha_ce * loss_ce
+
         if self.alpha_mlm > 0.0:
             loss_mlm = student_outputs["loss_mlm"].mean() if self.multi_gpu else student_outputs["loss_mlm"]
+            loss_mlm += dual_student_outputs["loss_mlm"].mean() if self.multi_gpu else dual_student_outputs["loss_mlm"]
             loss += self.alpha_mlm * loss_mlm
         if self.alpha_clm > 0.0:
             loss_clm = student_outputs["loss_clm"].mean() if self.multi_gpu else student_outputs["loss_clm"]
+            loss_clm += dual_student_outputs["loss_clm"].mean() if self.multi_gpu else dual_student_outputs["loss_clm"]
             loss += self.alpha_clm * loss_clm
         if self.alpha_mse > 0.0:
             loss_mse = student_outputs["loss_mse"].mean() if self.multi_gpu else student_outputs["loss_mse"]
+            loss_mse += dual_student_outputs["loss_mse"].mean() if self.multi_gpu else dual_student_outputs["loss_mse"]
             loss += self.alpha_mse * loss_mse
         if self.alpha_cos > 0.0:
             loss_cos = student_outputs["loss_cos"].mean() if self.multi_gpu else student_outputs["loss_cos"]
+            loss_cos += dual_student_outputs["loss_cos"].mean() if self.multi_gpu else dual_student_outputs["loss_cos"]
             loss += self.alpha_cos * loss_cos
-
+            
        # we need to get causal distillation loss!
-        counterfactual_activations_student = get_activation_at(
+        dual_counterfactual_activations_student = get_activation_at(
             self.student,
             dual_input_ids, # this is different!
             dual_attention_mask, # this is different!
             variable_names=student_variable_names
         )
+        counterfactual_activations_student = get_activation_at(
+            self.student,
+            input_ids, # this is different!
+            attention_mask, # this is different!
+            variable_names=student_variable_names
+        )
+        # dual on main.
         counterfactual_outputs_student = self.student(
             input_ids=input_ids, # this is different!
             attention_mask=attention_mask, # this is different!
             # interchange.
-            interchanged_variables=counterfactual_activations_student,
+            interchanged_variables=dual_counterfactual_activations_student,
             variable_names=student_interchanged_variables_mapping,
             sampled_interchange_position=sampled_interchange_position,
             # loss.
@@ -617,15 +671,41 @@ class CausalDistiller:
             temperature=self.temperature,
             restrict_ce_to_mask=self.params.restrict_ce_to_mask,
         )
+        # main on dual.
+        dual_counterfactual_outputs_student = self.student(
+            input_ids=dual_input_ids, # this is different!
+            attention_mask=dual_attention_mask, # this is different!
+            # interchange.
+            interchanged_variables=dual_counterfactual_activations_student,
+            variable_names=student_interchanged_variables_mapping,
+            sampled_interchange_position=sampled_interchange_position,
+            # loss.
+            t_logits=dual_t_logits,
+            t_hidden_states=dual_t_hidden_states,
+            causal_t_logits=dual_causal_t_logits,
+            causal_t_hidden_states=dual_causal_t_hidden_states,
+            s_logits=dual_s_logits,
+            s_hidden_states=dual_s_hidden_states,
+            temperature=self.temperature,
+            restrict_ce_to_mask=self.params.restrict_ce_to_mask,
+        )
+        
         # sanity check.
-        assert "loss_ce" not in counterfactual_outputs_student
-        assert "loss_mlm" not in counterfactual_outputs_student
-        assert "loss_clm" not in counterfactual_outputs_student
-        assert "loss_mse" not in counterfactual_outputs_student
-        assert "loss_cos" not in counterfactual_outputs_student
+        assert "loss_ce" not in counterfactual_outputs_student and "loss_ce" not in dual_counterfactual_outputs_student
+        assert "loss_mlm" not in counterfactual_outputs_student and "loss_mlm" not in dual_counterfactual_outputs_student
+        assert "loss_clm" not in counterfactual_outputs_student and "loss_clm" not in dual_counterfactual_outputs_student
+        assert "loss_mse" not in counterfactual_outputs_student and "loss_mse" not in dual_counterfactual_outputs_student
+        assert "loss_cos" not in counterfactual_outputs_student and "loss_cos" not in dual_counterfactual_outputs_student
         causal_loss_ce = counterfactual_outputs_student["causal_loss_ce"].mean() if self.multi_gpu else counterfactual_outputs_student["causal_loss_ce"]
-        teacher_interchange_efficacy = counterfactual_outputs_student["teacher_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["teacher_interchange_efficacy"]
-        student_interchange_efficacy = counterfactual_outputs_student["student_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["student_interchange_efficacy"]
+        causal_loss_ce += dual_counterfactual_outputs_student["causal_loss_ce"].mean() if self.multi_gpu else dual_counterfactual_outputs_student["causal_loss_ce"]
+        teacher_interchange_efficacy = \
+            counterfactual_outputs_student["teacher_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["teacher_interchange_efficacy"]
+        student_interchange_efficacy = \
+            counterfactual_outputs_student["student_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["student_interchange_efficacy"]
+        teacher_interchange_efficacy += \
+            dual_counterfactual_outputs_student["teacher_interchange_efficacy"].mean() if self.multi_gpu else dual_counterfactual_outputs_student["teacher_interchange_efficacy"]
+        student_interchange_efficacy += \
+            dual_counterfactual_outputs_student["student_interchange_efficacy"].mean() if self.multi_gpu else dual_counterfactual_outputs_student["student_interchange_efficacy"]
         if self.alpha_causal > 0.0:
             loss += self.alpha_causal * causal_loss_ce
                 
