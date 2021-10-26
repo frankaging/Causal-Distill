@@ -559,7 +559,6 @@ class CausalDistiller:
                 This subroutine will be the normal distillation
                 with optional causal loss.
                 """
-                print("!!")
                 self._step(
                     input_ids,
                     attention_mask,
