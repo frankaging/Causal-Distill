@@ -475,6 +475,8 @@ class CausalDistiller:
                     dual_attention_mask=dual_attn_mask, 
                     dual_lm_labels=dual_lm_labels,
                     sampled_interchange_position=sampled_interchange_position,
+                    is_parallel=self.params.parallel_crossway,
+                    is_crossway=self.params.include_crossway,
                 )
                 iter_bar.update()
                 iter_bar.set_postfix(
@@ -503,8 +505,246 @@ class CausalDistiller:
         dual_attention_mask: torch.tensor, 
         dual_lm_labels: torch.tensor,
         sampled_interchange_position: torch.tensor,
+        is_parallel=False,
+        is_crossway=False,
+    ):
+        if is_parallel:
+            assert is_crossway
+            """
+            If we enable crossway and parallel, we make 
+            sure we compute pair-wise losses for two 
+            examples together.
+            Note that this requires larger GPUs.
+            """
+            self._step_parallel(
+                input_ids,
+                attention_mask,
+                lm_labels,
+                dual_input_ids,
+                dual_attention_mask,
+                dual_lm_labels,
+                sampled_interchange_position,
+            )
+        else:
+            """
+            If it is not parallel, we will have two mini-step
+            within each step. The second step will only backprop
+            loss without updating the iteration, so the optimization
+            is not affected.
+            """
+            if is_crossway:
+                self._step(
+                    input_ids,
+                    attention_mask,
+                    lm_labels,
+                    dual_input_ids,
+                    dual_attention_mask,
+                    dual_lm_labels,
+                    sampled_interchange_position,
+                    skip_update_iter=False,
+                )
+                # the second mini-step for the reversed pair.
+                self._step(
+                    dual_input_ids,
+                    dual_attention_mask,
+                    dual_lm_labels,
+                    input_ids,
+                    attention_mask,
+                    lm_labels,
+                    sampled_interchange_position,
+                    skip_update_iter=True,
+                )
+            else:
+                """
+                This subroutine will be the normal distillation
+                with optional causal loss.
+                """
+                print("!!")
+                self._step(
+                    input_ids,
+                    attention_mask,
+                    lm_labels,
+                    dual_input_ids,
+                    dual_attention_mask,
+                    dual_lm_labels,
+                    sampled_interchange_position,
+                    skip_update_iter=False,
+                )
+
+    def _step(
+        self, input_ids: torch.tensor, 
+        attention_mask: torch.tensor, 
+        lm_labels: torch.tensor,
+        dual_input_ids: torch.tensor, 
+        dual_attention_mask: torch.tensor, 
+        dual_lm_labels: torch.tensor,
+        sampled_interchange_position: torch.tensor,
+        skip_update_iter=False,
     ):
         """
+        One optimization step: forward of student AND teacher, backward on the loss (for gradient accumulation),
+        and possibly a parameter update (depending on the gradient accumulation).
+
+        Input:
+        ------
+        input_ids/dual_input_ids: `torch.tensor(bs, seq_length)` - The token ids.
+        attention_mask/dual_attention_mask: `torch.tensor(bs, seq_length)` - The attention mask for self attention.
+        lm_labels/dual_lm_labels: `torch.tensor(bs, seq_length)` - The language modeling labels (mlm labels for MLM and clm labels for CLM).
+        """
+        # preparing for causal distillation.
+        # we randomly select the pool of neurons to interchange.
+        selector = random.randint(0, len(self.deserialized_interchange_variable_mappings)-1)
+        interchange_variable_mapping = self.deserialized_interchange_variable_mappings[selector]
+        teacher_variable_names = random.choice(interchange_variable_mapping[0])
+        student_variable_names = random.choice(interchange_variable_mapping[1])
+        teacher_interchanged_variables_mapping = {}
+        student_interchanged_variables_mapping = {}
+        # we need to do the interchange here.
+        for i, variable in enumerate(teacher_variable_names):
+            layer_index, head_index, LOC = parse_variable_name(variable)
+            if layer_index in teacher_interchanged_variables_mapping:
+                teacher_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
+            else:
+                teacher_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
+        for i, variable in enumerate(student_variable_names):
+            layer_index, head_index, LOC = parse_variable_name(variable)
+            if layer_index in student_interchanged_variables_mapping:
+                student_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
+            else:
+                student_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
+        
+        if self.mlm:
+            with torch.no_grad():
+                # teacher forward pass normal.
+                teacher_outputs = self.teacher(
+                    input_ids=input_ids, attention_mask=attention_mask
+                )  # (bs, seq_length, voc_size)
+                # dual on main example
+                # teacher forward pass for interchange variables.
+                dual_counterfactual_activations_teacher = get_activation_at(
+                    self.teacher,
+                    dual_input_ids, # this is different!
+                    dual_attention_mask, # this is different!
+                    variable_names=teacher_variable_names
+                )
+                # teacher forward pass for interchanged outputs.
+                counterfactual_outputs_teacher = self.teacher(
+                    input_ids=input_ids, # this is different!
+                    attention_mask=attention_mask, # this is different!
+                    interchanged_variables=dual_counterfactual_activations_teacher,
+                    variable_names=teacher_interchanged_variables_mapping,
+                    sampled_interchange_position=sampled_interchange_position,
+                )
+            t_logits, t_hidden_states = \
+                teacher_outputs["logits"], teacher_outputs["hidden_states"]
+            student_outputs = self.student(
+                input_ids=input_ids, attention_mask=attention_mask,
+                t_logits=t_logits,
+                t_hidden_states=t_hidden_states,
+                temperature=self.temperature,
+                restrict_ce_to_mask=self.params.restrict_ce_to_mask,
+                lm_labels=lm_labels,
+                alpha_mlm=self.alpha_mlm,
+                alpha_clm=self.alpha_clm,
+                alpha_mse=self.alpha_mse,
+                alpha_cos=self.alpha_cos,
+            )  # (bs, seq_length, voc_size)
+            s_logits, s_hidden_states = student_outputs["logits"], student_outputs["hidden_states"]
+            causal_t_logits, causal_t_hidden_states = \
+                counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
+        else:
+            assert False # we are not supporting this branch!
+        
+        # standard losses.
+        loss_ce = student_outputs["loss_ce"].mean() if self.multi_gpu else student_outputs["loss_ce"]
+        loss = self.alpha_ce * loss_ce
+
+        if self.alpha_mlm > 0.0:
+            loss_mlm = student_outputs["loss_mlm"].mean() if self.multi_gpu else student_outputs["loss_mlm"]
+            loss += self.alpha_mlm * loss_mlm
+        if self.alpha_clm > 0.0:
+            loss_clm = student_outputs["loss_clm"].mean() if self.multi_gpu else student_outputs["loss_clm"]
+            loss += self.alpha_clm * loss_clm
+        if self.alpha_mse > 0.0:
+            loss_mse = student_outputs["loss_mse"].mean() if self.multi_gpu else student_outputs["loss_mse"]
+            loss += self.alpha_mse * loss_mse
+        if self.alpha_cos > 0.0:
+            loss_cos = student_outputs["loss_cos"].mean() if self.multi_gpu else student_outputs["loss_cos"]
+            loss += self.alpha_cos * loss_cos
+            
+        # we need to get causal distillation loss!
+        dual_counterfactual_activations_student = get_activation_at(
+            self.student,
+            dual_input_ids, # this is different!
+            dual_attention_mask, # this is different!
+            variable_names=student_variable_names
+        )
+        # dual on main.
+        counterfactual_outputs_student = self.student(
+            input_ids=input_ids, # this is different!
+            attention_mask=attention_mask, # this is different!
+            # interchange.
+            interchanged_variables=dual_counterfactual_activations_student,
+            variable_names=student_interchanged_variables_mapping,
+            sampled_interchange_position=sampled_interchange_position,
+            # loss.
+            t_logits=t_logits,
+            t_hidden_states=t_hidden_states,
+            causal_t_logits=causal_t_logits,
+            causal_t_hidden_states=causal_t_hidden_states,
+            s_logits=s_logits,
+            s_hidden_states=s_hidden_states,
+            temperature=self.temperature,
+            restrict_ce_to_mask=self.params.restrict_ce_to_mask,
+        )
+        # sanity check.
+        assert "loss_ce" not in counterfactual_outputs_student
+        assert "loss_mlm" not in counterfactual_outputs_student
+        assert "loss_clm" not in counterfactual_outputs_student
+        assert "loss_mse" not in counterfactual_outputs_student
+        assert "loss_cos" not in counterfactual_outputs_student
+        causal_loss_ce = counterfactual_outputs_student["causal_loss_ce"].mean() if self.multi_gpu else counterfactual_outputs_student["causal_loss_ce"]
+        teacher_interchange_efficacy = \
+            counterfactual_outputs_student["teacher_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["teacher_interchange_efficacy"]
+        student_interchange_efficacy = \
+            counterfactual_outputs_student["student_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["student_interchange_efficacy"]
+        if self.alpha_causal > 0.0:
+            loss += self.alpha_causal * causal_loss_ce
+                
+        self.total_loss_epoch += loss.item()
+        self.last_loss = loss.item()
+        self.last_loss_ce = loss_ce.item()
+        if self.alpha_mlm > 0.0:
+            self.last_loss_mlm = loss_mlm.item()
+        if self.alpha_clm > 0.0:
+            self.last_loss_clm = loss_clm.item()
+        if self.alpha_mse > 0.0:
+            self.last_loss_mse = loss_mse.item()
+        if self.alpha_cos > 0.0:
+            self.last_loss_cos = loss_cos.item()
+        # optional recording of the value.
+        self.last_loss_causal_ce = causal_loss_ce.item()
+        # record efficacy of the interchange.
+        self.last_teacher_interchange_efficacy = teacher_interchange_efficacy.item()
+        self.last_student_interchange_efficacy = student_interchange_efficacy.item()
+            
+        self.optimize(loss, skip_update_iter=skip_update_iter)
+
+        self.n_sequences_epoch += input_ids.size(0)
+        
+    def _step_parallel(
+        self, input_ids: torch.tensor, 
+        attention_mask: torch.tensor, 
+        lm_labels: torch.tensor,
+        dual_input_ids: torch.tensor, 
+        dual_attention_mask: torch.tensor, 
+        dual_lm_labels: torch.tensor,
+        sampled_interchange_position: torch.tensor,
+    ):
+        """
+        WARNING: Parallel requires GPUs with larger memory. It involves computations across two examples
+        with two parallel iterations.
+        
         One optimization step: forward of student AND teacher, backward on the loss (for gradient accumulation),
         and possibly a parameter update (depending on the gradient accumulation).
 
@@ -730,7 +970,7 @@ class CausalDistiller:
 
         self.n_sequences_epoch += input_ids.size(0)
 
-    def optimize(self, loss):
+    def optimize(self, loss, skip_update_iter=False):
         """
         Normalization on the loss (gradient accumulation or distributed training), followed by
         backward pass on the loss, possibly followed by a parameter update (depending on the gradient accumulation).
@@ -753,8 +993,15 @@ class CausalDistiller:
                 scaled_loss.backward()
         else:
             loss.backward()
+        
+        """
+        In case where we want to do two mini-steps for dual on main interchange,
+        and main on dual interchange (including normal objectives), we want to
+        skip the iter update, so the gradients are accumulated within the step
+        which includes gradients from two mini-steps.
+        """
+        self.iter(skip_update_iter=skip_update_iter)
 
-        self.iter()
         if self.n_iter % self.params.gradient_accumulation_steps == 0:
             if self.fp16:
                 nn.utils.clip_grad_norm_(amp.master_params(self.optimizer), self.params.max_grad_norm)
@@ -764,18 +1011,25 @@ class CausalDistiller:
             self.optimizer.zero_grad()
             self.scheduler.step()
 
-    def iter(self):
+    def iter(self, skip_update_iter=False):
         """
         Update global counts, write to tensorboard and save checkpoint.
         """
-        self.n_iter += 1
-        self.n_total_iter += 1
-
+        
+        if not skip_update_iter:
+            self.n_iter += 1
+            self.n_total_iter += 1
+            if self.n_total_iter % self.params.checkpoint_interval == 0:
+                self.save_checkpoint()
+        
+        """
+        Logging is not affected by the flag skip_update_iter.
+        We want to log crossway effects, and losses should be
+        in the same magnitude.
+        """
         if self.n_total_iter % self.params.log_interval == 0:
             self.log_tensorboard()
             self.last_log = time.time()
-        if self.n_total_iter % self.params.checkpoint_interval == 0:
-            self.save_checkpoint()
 
     def log_tensorboard(self):
         """

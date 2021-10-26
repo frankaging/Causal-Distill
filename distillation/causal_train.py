@@ -110,6 +110,11 @@ def prepare_distiller(args):
     # ARGS #
     init_gpu_params(args)
     set_seed(args)
+    # More validations #
+    if args.parallel_crossway:
+        assert args.include_crossway
+    if not args.include_crossway:
+        assert not args.parallel_crossway
     if args.is_master:
         if os.path.exists(args.dump_path):
             if not args.force:
@@ -295,6 +300,12 @@ if __name__ == "__main__":
         type=float,
         help="Ratio of tokens to mask for interchange interventions. 1.0 means interchange all.",
     )
+    parser.add_argument(
+        "--include_crossway", default=False, action="store_true", help="Whether to include crossway losses."
+    )
+    parser.add_argument(
+        "--parallel_crossway", default=False, action="store_true", help="Whether to calculate cross losses in a single step."
+    )
     
     parser.add_argument("--word_mask", default=0.8, type=float, help="Proportion of tokens to mask out.")
     parser.add_argument("--word_keep", default=0.1, type=float, help="Proportion of tokens to keep.")
@@ -385,7 +396,7 @@ if __name__ == "__main__":
             alpha_causal=0.25,
             token_counts="./demo_data/binarized_text.train.token_counts.bert-base-uncased.pickle",
             student_config="./training_configs/distilbert-base-uncased.json",
-            dump_path="./results/",
+            dump_path="./arxiv_results/",
             teacher_name="bert-base-uncased",
             force=True,
             data_file="./demo_data/binarized_text.train.bert-base-uncased.pickle",
@@ -397,6 +408,8 @@ if __name__ == "__main__":
             interchange_prop=0.3,
             batch_size=5,
             gradient_accumulation_steps=50,
+            include_crossway=False,
+            parallel_crossway=False,
         )
         print("Prelude: running in notebook for testing only.")
         args = parser.parse_args([])
@@ -407,10 +420,13 @@ if __name__ == "__main__":
     # config the runname here and overwrite.
     data_name = args.data_file.split("/")[-2]
     neuron_mapping = args.neuron_mapping.split("/")[-1].split(".")[0]
-    run_name = f"s_{args.student_type}_t_{args.teacher_type}_data_{data_name}_seed_{args.seed}_mlm_{args.mlm}_ce_{args.alpha_ce}_mlm_{args.alpha_mlm}_cos_{args.alpha_cos}_causal_{args.alpha_causal}_nm_{neuron_mapping}"
+    run_name = f"s_{args.student_type}_t_{args.teacher_type}_data_{data_name}_seed_{args.seed}_mlm_{args.mlm}_ce_{args.alpha_ce}_mlm_{args.alpha_mlm}_cos_{args.alpha_cos}_causal_{args.alpha_causal}_nm_{neuron_mapping}_crossway_{args.include_crossway}"
     args.run_name = run_name
     args.dump_path = os.path.join(args.dump_path, args.run_name)
     sanity_checks(args)
+    # for arXiv, we enforce the following settings.
+    assert not args.include_crossway
+    assert not args.parallel_crossway
     
     distiller = prepare_distiller(args)
     

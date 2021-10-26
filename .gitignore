@@ -7,7 +7,8 @@ tmp/
 */data/
 */tmp/
 *DS_Store
-results/
+*results/
+
 models/teacher_model/*.bin
 models/teacher_model/*.pt
 models/teacher_model/*.ckpt.*
