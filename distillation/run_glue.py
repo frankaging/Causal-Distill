@@ -28,10 +28,11 @@ import random
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
-
+from pathlib import Path
 import datasets
 import numpy as np
 from datasets import load_dataset, load_metric
+import csv
 
 import transformers
 from transformers import (
@@ -67,6 +68,22 @@ task_to_keys = {
     "sst2": ("sentence", None),
     "stsb": ("sentence1", "sentence2"),
     "wnli": ("sentence1", "sentence2"),
+}
+
+task_to_metrics = {
+    "cola": ["matthews_correlation"],
+    "mnli": ["accuracy"],
+    "mnli_mismatched": ["accuracy"],
+    "mnli_matched": ["accuracy"],
+    "mnli-mm": ["accuracy"],
+    "mrpc": ["accuracy", "f1"],
+    "qnli": ["accuracy"],
+    "qqp": ["accuracy", "f1"],
+    "rte": ["accuracy"],
+    "sst2": ["accuracy"],
+    "stsb": ["pearson", "spearmanr"],
+    "wnli": ["accuracy"],
+    "hans": ["accuracy"],
 }
 
 logger = logging.getLogger(__name__)
@@ -141,22 +158,22 @@ class DataTrainingArguments:
     )
     test_file: Optional[str] = field(default=None, metadata={"help": "A csv or a json file containing the test data."})
 
-    def __post_init__(self):
-        if self.task_name is not None:
-            self.task_name = self.task_name.lower()
-            if self.task_name not in task_to_keys.keys():
-                raise ValueError("Unknown task, you should pick one in " + ",".join(task_to_keys.keys()))
-        elif self.dataset_name is not None:
-            pass
-        elif self.train_file is None or self.validation_file is None:
-            raise ValueError("Need either a GLUE task, a training/validation file or a dataset name.")
-        else:
-            train_extension = self.train_file.split(".")[-1]
-            assert train_extension in ["csv", "json"], "`train_file` should be a csv or a json file."
-            validation_extension = self.validation_file.split(".")[-1]
-            assert (
-                validation_extension == train_extension
-            ), "`validation_file` should have the same extension (csv or json) as `train_file`."
+#     def __post_init__(self):
+#         if self.task_name is not None:
+#             self.task_name = self.task_name.lower()
+#             if self.task_name not in task_to_keys.keys():
+#                 raise ValueError("Unknown task, you should pick one in " + ",".join(task_to_keys.keys()))
+#         elif self.dataset_name is not None:
+#             pass
+#         elif self.train_file is None or self.validation_file is None:
+#             raise ValueError("Need either a GLUE task, a training/validation file or a dataset name.")
+#         else:
+#             train_extension = self.train_file.split(".")[-1]
+#             assert train_extension in ["csv", "json"], "`train_file` should be a csv or a json file."
+#             validation_extension = self.validation_file.split(".")[-1]
+#             assert (
+#                 validation_extension == train_extension
+#             ), "`validation_file` should have the same extension (csv or json) as `train_file`."
 
 
 @dataclass
@@ -228,8 +245,29 @@ def main():
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
 
-    # overwrite the output dir a little bit.
     sub_output_dir = model_args.model_name_or_path.strip("/").split("/")[-1].strip("/")
+    model_args_list = sub_output_dir.split("_")
+    
+    if training_args.do_eval:
+        # we need to automatically pick out the task name.
+        task_name_list = model_args.model_name_or_path.split("_")
+        data_args.task_name = model_args_list[0]
+        assert data_args.task_name in list(task_to_keys.keys())
+        out_glue_task = data_args.task_name
+    assert data_args.task_name != None
+
+    for i in range(len(model_args_list)):
+        if model_args_list[i] == "seed":
+            out_seed = model_args_list[i+1]
+        if model_args_list[i] == "nm":
+            out_neuron_mapping = "_".join(model_args_list[i+1:-2])
+    if "mlm_True_ce_0.33_mlm_0.33_cos_0.33_causal_0.0" in model_args.model_name_or_path:
+        out_neuron_mapping = "null"
+        out_condition = "standard"
+    else:
+        out_condition = "counterfactual"
+    
+    # overwrite the output dir a little bit.
     if data_args.task_name not in sub_output_dir:
         sub_output_dir = f"{data_args.task_name}_{sub_output_dir}"
     else:
@@ -523,6 +561,19 @@ def main():
 
     # Evaluation
     if training_args.do_eval:
+        # the fixed output file.
+        eval_metrics_output_path = "../glue_evaluation_results.csv"
+        my_file = Path(eval_metrics_output_path)
+        if my_file.is_file():
+            pass
+        else:
+            # we need to write the header.
+            with open(eval_metrics_output_path, mode='w') as csv_file:
+                csv_writer = csv.writer(csv_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+                csv_writer.writerow([
+                    "training_paradigm", "neuron_mapping", "seed", "glue_task", "split", "metrics", "performance"
+                ])
+            
         logger.info("*** Evaluate ***")
 
         # Loop to handle MNLI double evaluation (matched, mis-matched)
@@ -543,6 +594,13 @@ def main():
             trainer.log_metrics("eval", metrics)
             trainer.save_metrics("eval", metrics)
 
+            for m in task_to_metrics[task]:
+                with open(eval_metrics_output_path, mode='a') as csv_file:
+                    csv_writer = csv.writer(csv_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+                    csv_writer.writerow([
+                      out_condition, out_neuron_mapping, out_seed, task, "eval", m, metrics[f"eval_{m}"],
+                    ])
+            
     if training_args.do_predict:
         logger.info("*** Predict ***")
 
