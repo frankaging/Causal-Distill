@@ -448,9 +448,7 @@ class CausalDistiller:
             iter_bar = tqdm(self.dataloader, desc="-Iter", disable=self.params.local_rank not in [-1, 0])
             for batch in iter_bar:
                 token_ids, lengths, dual_token_ids, dual_lengths = batch
-                # from length, let us get the intervention points?
-                sampled_interchange_position = self.prepare_interchange_position(lengths, dual_lengths)
-                
+
                 if self.params.n_gpu > 0:
                     token_ids = token_ids.to(torch.device("cuda"))
                     lengths = lengths.to(torch.device("cuda"))
@@ -467,6 +465,10 @@ class CausalDistiller:
                     dual_token_ids, dual_attn_mask, dual_lm_labels = self.prepare_batch_clm(
                         batch=(dual_token_ids, dual_lengths)
                     )
+                    
+                # from length, let us get the intervention points?
+                sampled_interchange_position = self.prepare_interchange_position(lengths, dual_lengths)
+                
                 self.step(
                     input_ids=token_ids, 
                     attention_mask=attn_mask, 
@@ -541,7 +543,7 @@ class CausalDistiller:
                     dual_attention_mask,
                     dual_lm_labels,
                     sampled_interchange_position,
-                    skip_update_iter=False,
+                    skip_update_iter=True,
                 )
                 # the second mini-step for the reversed pair.
                 self._step(
@@ -552,7 +554,7 @@ class CausalDistiller:
                     attention_mask,
                     lm_labels,
                     sampled_interchange_position,
-                    skip_update_iter=True,
+                    skip_update_iter=False,
                 )
             else:
                 """

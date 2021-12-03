@@ -1,3 +1,4 @@
+paper_figures/
 *.csv
 *-dataset/
 wikitext-15M/

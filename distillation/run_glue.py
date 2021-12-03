@@ -259,19 +259,26 @@ def main():
     for i in range(len(model_args_list)):
         if model_args_list[i] == "seed":
             out_seed = model_args_list[i+1]
-        if model_args_list[i] == "nm":
-            out_neuron_mapping = "_".join(model_args_list[i+1:-2])
-    if "mlm_True_ce_0.33_mlm_0.33_cos_0.33_causal_0.0" in model_args.model_name_or_path:
-        out_neuron_mapping = "null"
+    if "ce_0.33_mlm_0.33_cos_0.33_causal_0.0" in model_args.model_name_or_path:
+        out_neuron_mapping = "no_mapping"
         out_condition = "standard"
     else:
         out_condition = "counterfactual"
+        if "nm_single_middle" in model_args.model_name_or_path:
+            out_neuron_mapping = "single_middle"
+        elif "nm_multiple_single_middle_late" in model_args.model_name_or_path:
+            out_neuron_mapping = "multiple_single_middle_late"
+        elif "nm_multiple_single_multilayer" in model_args.model_name_or_path:
+            out_neuron_mapping = "multiple_single_multilayer"
+        else:
+            assert out_neuron_mapping == "no_mapping"
     
     # overwrite the output dir a little bit.
     if data_args.task_name not in sub_output_dir:
         sub_output_dir = f"{data_args.task_name}_{sub_output_dir}"
     else:
         pass # it is already the task subdirectory!
+    sub_output_dir = f"{sub_output_dir}_gseed_{training_args.seed}"
     training_args.output_dir = os.path.join(training_args.output_dir, sub_output_dir)
     training_args.run_name = sub_output_dir
     logger.info(f"WANDB RUN NAME: {training_args.run_name}")
