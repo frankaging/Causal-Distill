@@ -26,7 +26,7 @@ If you use this repository, please cite the following two papers: [paper for int
 
   @article{wu-etal-2021-iit,
         title={Causal Distillation for Language Models}, 
-        author={Wu, Zhengxuan and Geiger, Atticus and Rozner, Josh and Kreiss, Elisa and Lu, Hanson and Icard, Thomas and Goodman, Noah D. and Potts, Christopher},
+        author={Wu, Zhengxuan and Geiger, Atticus and Rozner, Josh and Kreiss, Elisa and Lu, Hanson and Icard, Thomas and Potts, Christopher and Goodman, Noah D.},
         year={2021},
         eprint={},
         archivePrefix={arXiv},
