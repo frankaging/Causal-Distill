@@ -29,7 +29,8 @@ import os
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
-
+from pathlib import Path
+import csv
 import datasets
 from datasets import load_dataset, load_metric
 
@@ -245,14 +246,34 @@ def main():
     logger.info(f"Training/evaluation parameters {training_args}")
 
     sub_output_dir = model_args.model_name_or_path.strip("/").split("/")[-1].strip("/")
+    model_args_list = sub_output_dir.split("_")
     # overwrite the output dir a little bit.
     if data_args.dataset_name not in sub_output_dir:
         sub_output_dir = f"{data_args.dataset_name}_{sub_output_dir}"
     else:
         pass # it is already the task subdirectory!
+    sub_output_dir = f"{sub_output_dir}_tseed_{training_args.seed}"
     training_args.output_dir = os.path.join(training_args.output_dir, sub_output_dir)
+    
     training_args.run_name = sub_output_dir
     logger.info(f"WANDB RUN NAME: {training_args.run_name}")
+    
+    for i in range(len(model_args_list)):
+        if model_args_list[i] == "seed":
+            out_seed = model_args_list[i+1]
+    if "ce_0.33_mlm_0.33_cos_0.33_causal_0.0" in model_args.model_name_or_path:
+        out_neuron_mapping = "no_mapping"
+        out_condition = "standard"
+    else:
+        out_condition = "counterfactual"
+        if "nm_single_middle" in model_args.model_name_or_path:
+            out_neuron_mapping = "single_middle"
+        elif "nm_multiple_single_middle_late" in model_args.model_name_or_path:
+            out_neuron_mapping = "multiple_single_middle_late"
+        elif "nm_multiple_single_multilayer" in model_args.model_name_or_path:
+            out_neuron_mapping = "multiple_single_multilayer"
+        else:
+            assert out_neuron_mapping == "no_mapping"
     
     # Detecting last checkpoint.
     last_checkpoint = None
@@ -628,6 +649,20 @@ def main():
 
     # Evaluation
     if training_args.do_eval:
+        # the fixed output file.
+        eval_metrics_output_path = "../qa_evaluation_results.csv"
+        my_file = Path(eval_metrics_output_path)
+        if my_file.is_file():
+            pass
+        else:
+            # we need to write the header.
+            with open(eval_metrics_output_path, mode='w') as csv_file:
+                csv_writer = csv.writer(csv_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+                csv_writer.writerow([
+                    "training_paradigm", "neuron_mapping", "seed", "task", "split", "metrics", "performance"
+                ])
+        
+        
         logger.info("*** Evaluate ***")
         metrics = trainer.evaluate()
 
@@ -637,6 +672,19 @@ def main():
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
+        em_row = [
+          out_condition, out_neuron_mapping, out_seed, data_args.dataset_name, "eval", "em", metrics["eval_exact_match"]
+        ]
+        
+        f1_row = [
+          out_condition, out_neuron_mapping, out_seed, data_args.dataset_name, "eval", "f1", metrics["eval_f1"]
+        ]
+        
+        with open(eval_metrics_output_path, mode='a') as csv_file:
+            csv_writer = csv.writer(csv_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+            csv_writer.writerow(em_row)
+            csv_writer.writerow(f1_row)
+        
     # Prediction
     if training_args.do_predict:
         logger.info("*** Predict ***")
