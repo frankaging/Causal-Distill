@@ -1,6 +1,6 @@
 # Causal Distillation for Language Models
 
-Codebase for Causal Distillation for Language Models. We fork our main codebase from the [Huggingface Distillation Interface](https://github.com/huggingface/transformers/tree/master/examples/research_projects/distillation). This makes it extremely easy to be intergrated with your customized stuffs.
+Codebase for Causal Distillation for Language Models. We fork our main codebase from the [Huggingface Distillation Interface](https://github.com/huggingface/transformers/tree/master/examples/research_projects/distillation).
 
 ## Release Notes
 * **12/02/2021**: We are preparing to release our code.
