@@ -33,7 +33,6 @@ If you experience any issues or have suggestions, please contact me either thour
 * [Dataset](#dataset)
 * [Distillation](#distillation)
 * [Evaluation](#evaluation)
-* [License](#license)
 
 ## Citation
 If you use this repository, please cite the following two papers: [paper for interchange intervention training](https://arxiv.org/abs/2112.00826), and [paper for the our distillation method](https://arxiv.org/abs/2109.08994).
@@ -253,7 +252,3 @@ CUDA_VISIBLE_DEVICES=2,3,7,8 python run_qa.py \
 --save_total_limit 1 \
 --output_dir ./qa_results/
 ```
-
-## License
-
-ReaSCAN has a [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/).
