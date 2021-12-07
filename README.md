@@ -27,7 +27,17 @@ We fork our main codebase from the [Huggingface Distillation Interface](https://
 
 If you experience any issues or have suggestions, please contact me either thourgh the issues page or at wuzhengx@stanford.edu. 
 
-## Contents
+## Benchmark Results
+Here are the results on the dev sets of GLUE:
+
+| Model                     | Average-score                  | CoLA | MNLI | MRPC | QNLI | QQP  | RTE  | SST-2| STS-B| WNLI              |
+| :---:                     |    :---:                       | :---:| :---:| :---:| :---:| :---:| :---:| :---:| :---:| :---:             |
+| DistilBERT (3 layers)     |  **67.8**<sup>1</sup>          | 22.8 | 71.6 | 78.2 | 82.1 | 84.3 | 55.4 | 86.5 | 56.7 | 24.2              |
+| CausalBERT (3 layers)     |  **69.7**<sup>1</sup>          | 25.0 | 72.9 | 78.6 | 83.1 | 84.9 | 55.4 | 86.9 | 66.5 | 21.5              |
+
+<sup>1</sup> Average-score computed without WNLI.
+
+## Main Contents
 * [Citation](#citation)
 * [Requirements](#requirements)
 * [Dataset](#dataset)
