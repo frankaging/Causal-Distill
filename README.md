@@ -16,7 +16,7 @@ The is an implementation of our preprint [Causal Distillation for Language Model
 We fork our main codebase from the [Huggingface Distillation Interface](https://github.com/huggingface/transformers/tree/master/examples/research_projects/distillation).
 
 ## Release Notes
-:white_check_mark: 12/02/2021 Our paper on [Interchange Intervention Training (IIT)](https://arxiv.org/abs/2112.00826) is released! Read this more formal definition of the method.   
+:white_check_mark: 12/02/2021 Our paper on [Interchange Intervention Training (IIT)](https://arxiv.org/abs/2112.00826) is released! Read this for a more formal definition of the method.   
 :white_check_mark: 12/06/2021 Released the causal distillation codebase with [the preprint](https://zen-wu.social/papers/ACL22_CausalDistill.pdf).   
 :white_check_mark: 12/06/2021 Released evaluation results on distilled tiny-BERT (3 layers) with the Wiki-Text 103M dataset.   
 ⬜️ Released evaluation results on causal-distilled tiny-BERT (3 layers) with the Wiki-Text 103M + BookCorpus dataset.   
