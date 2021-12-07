@@ -1,12 +1,35 @@
-# Causal Distillation for Language Models
+![Python 3.7](https://img.shields.io/badge/python-3.7-blueviolet.svg?style=plastic)
+![License CC BY-NC](https://img.shields.io/badge/license-MIT-05b502.svg?style=plastic)
 
-Codebase for Causal Distillation for Language Models. We fork our main codebase from the [Huggingface Distillation Interface](https://github.com/huggingface/transformers/tree/master/examples/research_projects/distillation).
+# Causal Distillation for Language Models
+<p align="center">
+  <b><a href="https://zen-wu.social/">Zhengxuan Wu</a>*,<a href="https://atticusg.github.io/">Atticus Geiger</a>*, <a href="https://www.linkedin.com/in/jsrozner/">Josh Rozner</a>, <a href="https://www.elisakreiss.com/">Elisa Kreiss</a>, <a href="https://www.linkedin.com/in/hansonhxlu/">Hanson Lu</a>, <a href="https://web.stanford.edu/~icard/">Thomas Icard</a>, <a href="https://web.stanford.edu/~cgpotts/">Christopher Potts</a>, <a href="https://cocolab.stanford.edu/ndg">Noah D. Goodman</a></b></span>
+</p>
+
+<div align="center">
+  <img src="https://i.ibb.co/Q8NNHPJ/Screen-Shot-2021-12-06-at-4-53-28-PM.png" style="float:left" width="800px">
+</div>
+<p></p>
+
+The is an implementation of our preprint [Causal Distillation for Language Models](https://zen-wu.social/papers/ACL22_CausalDistill.pdf). The standard approach to distillation trains a student model against two objectives: a task-specific objective (e.g., language modeling) and an imitation objective that encourages the hidden states of the student model to be similar to those of the larger teacher model. In this paper, we show that it is beneficial to augment distillation with a third objective that encourages the student to imitate the causal computation process of the teacher through **interchange intervention training (IIT)**. 
+
+We fork our main codebase from the [Huggingface Distillation Interface](https://github.com/huggingface/transformers/tree/master/examples/research_projects/distillation).
 
 ## Release Notes
-* **12/02/2021**: We are preparing to release our code.
+:white_check_mark: 12/02/2021 Our paper on [Interchange Intervention Training (IIT)](https://arxiv.org/abs/2112.00826) is released! Read this more formal definition of the method.   
+:white_check_mark: 12/06/2021 Released the causal distillation codebase with [the preprint](https://zen-wu.social/papers/ACL22_CausalDistill.pdf).   
+:white_check_mark: 12/06/2021 Released evaluation results on distilled tiny-BERT (3 layers) with the Wiki-Text 103M dataset.   
+⬜️ Released evaluation results on causal-distilled tiny-BERT (3 layers) with the Wiki-Text 103M + BookCorpus dataset.   
+⬜️ Released evaluation results on causal-distilled BERT (6 layers) with the Wiki-Text 103M + BookCorpus dataset.    
+⬜️ Released more ablation studies.   
+⬜️ Released causal-distilled tiny-BERT (3 layers) model files.   
+⬜️ Released causal-distilled BERT (6 layers) model files.   
+
+If you experience any issues or have suggestions, please contact me either thourgh the issues page or at wuzhengx@stanford.edu. 
 
 ## Contents
 * [Citation](#citation)
+* [Requirements](#requirements)
 * [Dataset](#dataset)
 * [Distillation](#distillation)
 * [Evaluation](#evaluation)
@@ -34,6 +57,14 @@ If you use this repository, please cite the following two papers: [paper for int
   }
 
 ```
+
+## Requirements
+- Python 3.6 or 3.7 are supported.
+- Pytorch Version: 1.9.0
+- Transfermers Version: 4.11.3
+- Datasets Version: Version: 1.8.0
+- We have performed experiments on Titan V GPU. We assume 12GB of GPU memory (more memory can expedite training).
+- Since we build our codebase off the [Huggingface Distillation Interface](https://github.com/huggingface/transformers/tree/master/examples/research_projects/distillation), please review their doc for requirements.
 
 ## Dataset
 Following the [Huggingface Distillation Interface](https://github.com/huggingface/transformers/tree/master/examples/research_projects/distillation), we need to pre-process the datasets before we do distillation. You can refer to their repo for details. We adapt their pre-processing scripts, and update with a few improvements. For example, we can now binarize datasets from the Dataset Hub from huggingface directly.
