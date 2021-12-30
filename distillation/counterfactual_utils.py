@@ -47,11 +47,22 @@ def parse_variable_name(variable_name, model_config=None):
         # to be supported.
         pass
     
-
+def get_head_dimension(
+    model
+):
+    if not isinstance(model, torch.nn.DataParallel):
+        head_dimension = model.config.hidden_size // model.config.num_attention_heads
+    else:
+        head_dimension = model.module.config.hidden_size // model.module.config.num_attention_heads
+    return head_dimension
+    
 def get_activation_at(
     model, input_ids, attention_mask, 
     variable_names
 ):
+    if variable_names == "embeddings":
+        return None
+
     outputs = model(
         input_ids=input_ids, 
         attention_mask=attention_mask

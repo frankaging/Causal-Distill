@@ -151,7 +151,8 @@ class CausalDistiller:
         self.alpha_clm = params.alpha_clm
         self.alpha_mse = params.alpha_mse
         self.alpha_cos = params.alpha_cos
-        self.alpha_causal = params.alpha_causal
+        self.alpha_causal_ce = params.alpha_causal_ce
+        self.alpha_causal_cos = params.alpha_causal_cos
 
         self.mlm = params.mlm
         if self.mlm:
@@ -170,7 +171,11 @@ class CausalDistiller:
 
         self.interchange_mlm = params.interchange_mlm
         self.interchange_prop = params.interchange_prop
-            
+        self.interchange_max_token = params.interchange_max_token # if -1 then we don't restrict on this.
+        self.interchange_masked_token_only = params.interchange_masked_token_only
+        self.interchange_consecutive_only = params.interchange_consecutive_only
+        self.data_augment = params.data_augment
+        
         self.epoch = 0
         self.n_iter = 0
         self.n_total_iter = 0
@@ -338,7 +343,7 @@ class CausalDistiller:
         # sanity checks
         assert 0 <= token_ids.min() <= token_ids.max() < self.vocab_size
 
-        return token_ids, attn_mask, mlm_labels
+        return token_ids, attn_mask, mlm_labels, pred_mask
 
     def prepare_batch_clm(self, batch):
         """
@@ -416,7 +421,74 @@ class CausalDistiller:
         assert x.size(1) % 8 == 0
         return x, lengths
 
-    def prepare_interchange_position(self, lengths, dual_lengths):
+    def prepare_interchange_mask(
+        self,
+        lengths, dual_lengths,
+        pred_mask, dual_pred_mask,
+    ):        
+        # params
+        interchange_prop = self.interchange_prop
+        interchange_max_token = self.interchange_max_token # if -1 then we don't restrict on this.
+        interchange_masked_token_only = self.interchange_masked_token_only
+        interchange_consecutive_only = self.interchange_consecutive_only
+        
+        interchange_mask = torch.zeros_like(pred_mask, dtype=torch.bool)
+        dual_interchange_mask = torch.zeros_like(dual_pred_mask, dtype=torch.bool)
+
+        batch_size, max_seq_len = pred_mask.shape[0], pred_mask.shape[1]
+        _, dual_max_seq_len = dual_pred_mask.shape[0], dual_pred_mask.shape[1]
+        interchange_position = []
+        for i in range(0, batch_size):
+            min_len = min(lengths[i].tolist(), dual_lengths[i].tolist())
+            if interchange_consecutive_only:
+                if interchange_max_token != -1:
+                    interchange_count = min(interchange_max_token, int(min_len*interchange_prop))
+                else:
+                    interchange_count = int(min_len*interchange_prop)
+                start_index = random.randint(0, lengths[i].tolist()-interchange_count)
+                end_index = start_index + interchange_count
+                dual_start_index = random.randint(0, dual_lengths[i].tolist()-interchange_count)
+                dual_end_index = dual_start_index + interchange_count
+                interchange_mask[i][start_index:end_index] = 1
+                dual_interchange_mask[i][dual_start_index:dual_end_index] = 1
+            else:
+                # we follow these steps to sample the position:
+                # 1. sample positions in the main example
+                # 2. get the actual sampled positions
+                # 3. sample accordingly from the dual example
+                if interchange_masked_token_only:
+                    # a corner case we need to consider is that the masked token
+                    # numbers may differ across two examples.
+                    interchange_count = pred_mask[i].sum()
+                    if interchange_count > dual_lengths[i]:
+                        # not likely, but we need to handle this.
+                        interchange_count = dual_lengths[i]
+                    interchange_position = pred_mask[i].nonzero().view(-1).tolist()
+                    interchange_position = random.sample(interchange_position, interchange_count)
+                    interchange_mask[i][interchange_position] = 1
+                    dual_interchange_position = random.sample(range(dual_max_seq_len), interchange_count)
+                    dual_interchange_mask[i][dual_interchange_position] = 1
+                else:
+                    if interchange_max_token != -1:
+                        interchange_count = min(interchange_max_token, int(min_len*interchange_prop))
+                    else:
+                        interchange_count = int(min_len*interchange_prop)
+                    interchange_position = random.sample(range(max_seq_len), interchange_count)
+                    interchange_mask[i][interchange_position] = 1
+                    dual_interchange_position = random.sample(range(dual_max_seq_len), interchange_count)
+                    dual_interchange_mask[i][dual_interchange_position] = 1
+
+        # sanity checks
+        assert interchange_mask.long().sum(dim=-1).tolist() == \
+                dual_interchange_mask.long().sum(dim=-1).tolist()
+
+        return interchange_mask, dual_interchange_mask
+    
+    def prepare_interchange_position(
+        self, 
+        lengths, dual_lengths,
+        pred_mask, dual_pred_mask,
+    ):
         interchange_prop = self.interchange_prop
         batch_size = lengths.shape[0]
         interchange_position = []
@@ -456,8 +528,10 @@ class CausalDistiller:
                     dual_lengths = dual_lengths.to(torch.device("cuda"))
                 
                 if self.mlm:
-                    token_ids, attn_mask, lm_labels = self.prepare_batch_mlm(batch=(token_ids, lengths))
-                    dual_token_ids, dual_attn_mask, dual_lm_labels = self.prepare_batch_mlm(
+                    token_ids, attn_mask, lm_labels, pred_mask = self.prepare_batch_mlm(
+                        batch=(token_ids, lengths)
+                    )
+                    dual_token_ids, dual_attn_mask, dual_lm_labels, dual_pred_mask = self.prepare_batch_mlm(
                         batch=(dual_token_ids, dual_lengths)
                     )
                 else:
@@ -466,9 +540,11 @@ class CausalDistiller:
                         batch=(dual_token_ids, dual_lengths)
                     )
                     
-                # from length, let us get the intervention points?
-                sampled_interchange_position = self.prepare_interchange_position(lengths, dual_lengths)
-                
+                interchange_mask, dual_interchange_mask = self.prepare_interchange_mask(
+                    lengths, dual_lengths,
+                    pred_mask, dual_pred_mask,
+                )
+
                 self.step(
                     input_ids=token_ids, 
                     attention_mask=attn_mask, 
@@ -476,7 +552,8 @@ class CausalDistiller:
                     dual_input_ids=dual_token_ids, 
                     dual_attention_mask=dual_attn_mask, 
                     dual_lm_labels=dual_lm_labels,
-                    sampled_interchange_position=sampled_interchange_position,
+                    interchange_mask=interchange_mask, 
+                    dual_interchange_mask=dual_interchange_mask,
                     is_parallel=self.params.parallel_crossway,
                     is_crossway=self.params.include_crossway,
                 )
@@ -506,27 +583,14 @@ class CausalDistiller:
         dual_input_ids: torch.tensor, 
         dual_attention_mask: torch.tensor, 
         dual_lm_labels: torch.tensor,
-        sampled_interchange_position: torch.tensor,
+        interchange_mask: torch.tensor,
+        dual_interchange_mask: torch.tensor,
         is_parallel=False,
         is_crossway=False,
     ):
         if is_parallel:
-            assert is_crossway
-            """
-            If we enable crossway and parallel, we make 
-            sure we compute pair-wise losses for two 
-            examples together.
-            Note that this requires larger GPUs.
-            """
-            self._step_parallel(
-                input_ids,
-                attention_mask,
-                lm_labels,
-                dual_input_ids,
-                dual_attention_mask,
-                dual_lm_labels,
-                sampled_interchange_position,
-            )
+            # we starts to deprecate this approach...
+            assert False
         else:
             """
             If it is not parallel, we will have two mini-step
@@ -542,7 +606,8 @@ class CausalDistiller:
                     dual_input_ids,
                     dual_attention_mask,
                     dual_lm_labels,
-                    sampled_interchange_position,
+                    interchange_mask,
+                    dual_interchange_mask,
                     skip_update_iter=True,
                 )
                 # the second mini-step for the reversed pair.
@@ -553,7 +618,8 @@ class CausalDistiller:
                     input_ids,
                     attention_mask,
                     lm_labels,
-                    sampled_interchange_position,
+                    interchange_mask,
+                    dual_interchange_mask,
                     skip_update_iter=False,
                 )
             else:
@@ -568,7 +634,8 @@ class CausalDistiller:
                     dual_input_ids,
                     dual_attention_mask,
                     dual_lm_labels,
-                    sampled_interchange_position,
+                    interchange_mask,
+                    dual_interchange_mask,
                     skip_update_iter=False,
                 )
 
@@ -579,7 +646,8 @@ class CausalDistiller:
         dual_input_ids: torch.tensor, 
         dual_attention_mask: torch.tensor, 
         dual_lm_labels: torch.tensor,
-        sampled_interchange_position: torch.tensor,
+        interchange_mask: torch.tensor,
+        dual_interchange_mask: torch.tensor,
         skip_update_iter=False,
     ):
         """
@@ -614,6 +682,19 @@ class CausalDistiller:
             else:
                 student_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
         
+        # ugly overwrite here, but consider other elegant way.
+        if self.data_augment:
+            teacher_variable_names = "embeddings"
+            student_variable_names = "embeddings"
+            teacher_interchanged_variables_mapping = "embeddings"
+            student_interchanged_variables_mapping = "embeddings"
+        if self.data_augment:
+            replacing_activations = dual_input_ids[dual_interchange_mask]
+            counterfactual_input_ids = input_ids.clone()
+            counterfactual_input_ids[interchange_mask] = replacing_activations
+        else:
+            counterfactual_input_ids = input_ids
+        
         if self.mlm:
             with torch.no_grad():
                 # teacher forward pass normal.
@@ -622,6 +703,7 @@ class CausalDistiller:
                 )  # (bs, seq_length, voc_size)
                 # dual on main example
                 # teacher forward pass for interchange variables.
+                
                 dual_counterfactual_activations_teacher = get_activation_at(
                     self.teacher,
                     dual_input_ids, # this is different!
@@ -630,12 +712,14 @@ class CausalDistiller:
                 )
                 # teacher forward pass for interchanged outputs.
                 counterfactual_outputs_teacher = self.teacher(
-                    input_ids=input_ids, # this is different!
+                    input_ids=counterfactual_input_ids, # this is different!
                     attention_mask=attention_mask, # this is different!
                     interchanged_variables=dual_counterfactual_activations_teacher,
                     variable_names=teacher_interchanged_variables_mapping,
-                    sampled_interchange_position=sampled_interchange_position,
+                    interchange_mask=interchange_mask,
+                    dual_interchange_mask=dual_interchange_mask,
                 )
+
             t_logits, t_hidden_states = \
                 teacher_outputs["logits"], teacher_outputs["hidden_states"]
             student_outputs = self.student(
@@ -682,12 +766,13 @@ class CausalDistiller:
         )
         # dual on main.
         counterfactual_outputs_student = self.student(
-            input_ids=input_ids, # this is different!
+            input_ids=counterfactual_input_ids, # this is different!
             attention_mask=attention_mask, # this is different!
             # interchange.
             interchanged_variables=dual_counterfactual_activations_student,
             variable_names=student_interchanged_variables_mapping,
-            sampled_interchange_position=sampled_interchange_position,
+            interchange_mask=interchange_mask,
+            dual_interchange_mask=dual_interchange_mask,
             # loss.
             t_logits=t_logits,
             t_hidden_states=t_hidden_states,
@@ -705,12 +790,11 @@ class CausalDistiller:
         assert "loss_mse" not in counterfactual_outputs_student
         assert "loss_cos" not in counterfactual_outputs_student
         causal_loss_ce = counterfactual_outputs_student["causal_loss_ce"].mean() if self.multi_gpu else counterfactual_outputs_student["causal_loss_ce"]
-        teacher_interchange_efficacy = \
-            counterfactual_outputs_student["teacher_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["teacher_interchange_efficacy"]
-        student_interchange_efficacy = \
-            counterfactual_outputs_student["student_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["student_interchange_efficacy"]
-        if self.alpha_causal > 0.0:
-            loss += self.alpha_causal * causal_loss_ce
+        causal_loss_cos = counterfactual_outputs_student["causal_loss_cos"].mean() if self.multi_gpu else counterfactual_outputs_student["causal_loss_cos"]
+        if self.alpha_causal_ce > 0.0:
+            loss += self.alpha_causal_ce * causal_loss_ce
+        if self.alpha_causal_cos > 0.0:
+            loss += self.alpha_causal_cos * causal_loss_cos
                 
         self.total_loss_epoch += loss.item()
         self.last_loss = loss.item()
@@ -725,249 +809,13 @@ class CausalDistiller:
             self.last_loss_cos = loss_cos.item()
         # optional recording of the value.
         self.last_loss_causal_ce = causal_loss_ce.item()
-        # record efficacy of the interchange.
-        self.last_teacher_interchange_efficacy = teacher_interchange_efficacy.item()
-        self.last_student_interchange_efficacy = student_interchange_efficacy.item()
+        # optional recording of the value.
+        self.last_loss_causal_cos = causal_loss_cos.item()
+        # record efficacy of the interchange. (we are not updating these fields for now.)
+        self.last_teacher_interchange_efficacy = 0.0
+        self.last_student_interchange_efficacy = 0.0
             
         self.optimize(loss, skip_update_iter=skip_update_iter)
-
-        self.n_sequences_epoch += input_ids.size(0)
-        
-    def _step_parallel(
-        self, input_ids: torch.tensor, 
-        attention_mask: torch.tensor, 
-        lm_labels: torch.tensor,
-        dual_input_ids: torch.tensor, 
-        dual_attention_mask: torch.tensor, 
-        dual_lm_labels: torch.tensor,
-        sampled_interchange_position: torch.tensor,
-    ):
-        """
-        WARNING: Parallel requires GPUs with larger memory. It involves computations across two examples
-        with two parallel iterations.
-        
-        One optimization step: forward of student AND teacher, backward on the loss (for gradient accumulation),
-        and possibly a parameter update (depending on the gradient accumulation).
-
-        Input:
-        ------
-        input_ids/dual_input_ids: `torch.tensor(bs, seq_length)` - The token ids.
-        attention_mask/dual_attention_mask: `torch.tensor(bs, seq_length)` - The attention mask for self attention.
-        lm_labels/dual_lm_labels: `torch.tensor(bs, seq_length)` - The language modeling labels (mlm labels for MLM and clm labels for CLM).
-        """
-        
-        # preparing for causal distillation.
-        # we randomly select the pool of neurons to interchange.
-        selector = random.randint(0, len(self.deserialized_interchange_variable_mappings)-1)
-        interchange_variable_mapping = self.deserialized_interchange_variable_mappings[selector]
-        teacher_variable_names = random.choice(interchange_variable_mapping[0])
-        student_variable_names = random.choice(interchange_variable_mapping[1])
-        teacher_interchanged_variables_mapping = {}
-        student_interchanged_variables_mapping = {}
-        # we need to do the interchange here.
-        for i, variable in enumerate(teacher_variable_names):
-            layer_index, head_index, LOC = parse_variable_name(variable)
-            if layer_index in teacher_interchanged_variables_mapping:
-                teacher_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
-            else:
-                teacher_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
-        for i, variable in enumerate(student_variable_names):
-            layer_index, head_index, LOC = parse_variable_name(variable)
-            if layer_index in student_interchanged_variables_mapping:
-                student_interchanged_variables_mapping[layer_index] += [(i, head_index, LOC)]
-            else:
-                student_interchanged_variables_mapping[layer_index] = [(i, head_index, LOC)]
-        
-        if self.mlm:
-            with torch.no_grad():
-                # teacher forward pass normal.
-                teacher_outputs = self.teacher(
-                    input_ids=input_ids, attention_mask=attention_mask
-                )  # (bs, seq_length, voc_size)
-                # teacher forward pass normal for the dual example.
-                dual_teacher_outputs = self.teacher(
-                    input_ids=dual_input_ids, attention_mask=dual_attention_mask
-                )  # (bs, seq_length, voc_size)
-                
-                # dual on main example
-                # teacher forward pass for interchange variables.
-                dual_counterfactual_activations_teacher = get_activation_at(
-                    self.teacher,
-                    dual_input_ids, # this is different!
-                    dual_attention_mask, # this is different!
-                    variable_names=teacher_variable_names
-                )
-                # teacher forward pass for interchanged outputs.
-                counterfactual_outputs_teacher = self.teacher(
-                    input_ids=input_ids, # this is different!
-                    attention_mask=attention_mask, # this is different!
-                    interchanged_variables=dual_counterfactual_activations_teacher,
-                    variable_names=teacher_interchanged_variables_mapping,
-                    sampled_interchange_position=sampled_interchange_position,
-                )   
-                
-                # main on dual example
-                # teacher forward pass for interchange variables.
-                counterfactual_activations_teacher = get_activation_at(
-                    self.teacher,
-                    input_ids, # this is different!
-                    attention_mask, # this is different!
-                    variable_names=teacher_variable_names
-                )
-                # teacher forward pass for interchanged outputs.
-                dual_counterfactual_outputs_teacher = self.teacher(
-                    input_ids=dual_input_ids, # this is different!
-                    attention_mask=dual_attention_mask, # this is different!
-                    interchanged_variables=counterfactual_activations_teacher,
-                    variable_names=teacher_interchanged_variables_mapping,
-                    sampled_interchange_position=sampled_interchange_position,
-                )
-            t_logits, t_hidden_states = \
-                teacher_outputs["logits"], teacher_outputs["hidden_states"]
-            dual_t_logits, dual_t_hidden_states = \
-                dual_teacher_outputs["logits"], dual_teacher_outputs["hidden_states"]
-            student_outputs = self.student(
-                input_ids=input_ids, attention_mask=attention_mask,
-                t_logits=t_logits,
-                t_hidden_states=t_hidden_states,
-                temperature=self.temperature,
-                restrict_ce_to_mask=self.params.restrict_ce_to_mask,
-                lm_labels=lm_labels,
-                alpha_mlm=self.alpha_mlm,
-                alpha_clm=self.alpha_clm,
-                alpha_mse=self.alpha_mse,
-                alpha_cos=self.alpha_cos,
-            )  # (bs, seq_length, voc_size)
-            dual_student_outputs = self.student(
-                input_ids=dual_input_ids, attention_mask=dual_attention_mask,
-                t_logits=dual_t_logits,
-                t_hidden_states=dual_t_hidden_states,
-                temperature=self.temperature,
-                restrict_ce_to_mask=self.params.restrict_ce_to_mask,
-                lm_labels=lm_labels,
-                alpha_mlm=self.alpha_mlm,
-                alpha_clm=self.alpha_clm,
-                alpha_mse=self.alpha_mse,
-                alpha_cos=self.alpha_cos,
-            )  # (bs, seq_length, voc_size)
-            s_logits, s_hidden_states = student_outputs["logits"], student_outputs["hidden_states"]
-            dual_s_logits, dual_s_hidden_states = student_outputs["logits"], student_outputs["hidden_states"]
-            causal_t_logits, causal_t_hidden_states = \
-                counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
-            dual_causal_t_logits, dual_causal_t_hidden_states = \
-                counterfactual_outputs_teacher["logits"], counterfactual_outputs_teacher["hidden_states"]
-        else:
-            assert False # we are not supporting this branch!
-        
-        # standard losses.
-        loss_ce = student_outputs["loss_ce"].mean() if self.multi_gpu else student_outputs["loss_ce"]
-        loss_ce += dual_student_outputs["loss_ce"].mean() if self.multi_gpu else dual_student_outputs["loss_ce"]
-        loss = self.alpha_ce * loss_ce
-
-        if self.alpha_mlm > 0.0:
-            loss_mlm = student_outputs["loss_mlm"].mean() if self.multi_gpu else student_outputs["loss_mlm"]
-            loss_mlm += dual_student_outputs["loss_mlm"].mean() if self.multi_gpu else dual_student_outputs["loss_mlm"]
-            loss += self.alpha_mlm * loss_mlm
-        if self.alpha_clm > 0.0:
-            loss_clm = student_outputs["loss_clm"].mean() if self.multi_gpu else student_outputs["loss_clm"]
-            loss_clm += dual_student_outputs["loss_clm"].mean() if self.multi_gpu else dual_student_outputs["loss_clm"]
-            loss += self.alpha_clm * loss_clm
-        if self.alpha_mse > 0.0:
-            loss_mse = student_outputs["loss_mse"].mean() if self.multi_gpu else student_outputs["loss_mse"]
-            loss_mse += dual_student_outputs["loss_mse"].mean() if self.multi_gpu else dual_student_outputs["loss_mse"]
-            loss += self.alpha_mse * loss_mse
-        if self.alpha_cos > 0.0:
-            loss_cos = student_outputs["loss_cos"].mean() if self.multi_gpu else student_outputs["loss_cos"]
-            loss_cos += dual_student_outputs["loss_cos"].mean() if self.multi_gpu else dual_student_outputs["loss_cos"]
-            loss += self.alpha_cos * loss_cos
-            
-       # we need to get causal distillation loss!
-        dual_counterfactual_activations_student = get_activation_at(
-            self.student,
-            dual_input_ids, # this is different!
-            dual_attention_mask, # this is different!
-            variable_names=student_variable_names
-        )
-        counterfactual_activations_student = get_activation_at(
-            self.student,
-            input_ids, # this is different!
-            attention_mask, # this is different!
-            variable_names=student_variable_names
-        )
-        # dual on main.
-        counterfactual_outputs_student = self.student(
-            input_ids=input_ids, # this is different!
-            attention_mask=attention_mask, # this is different!
-            # interchange.
-            interchanged_variables=dual_counterfactual_activations_student,
-            variable_names=student_interchanged_variables_mapping,
-            sampled_interchange_position=sampled_interchange_position,
-            # loss.
-            t_logits=t_logits,
-            t_hidden_states=t_hidden_states,
-            causal_t_logits=causal_t_logits,
-            causal_t_hidden_states=causal_t_hidden_states,
-            s_logits=s_logits,
-            s_hidden_states=s_hidden_states,
-            temperature=self.temperature,
-            restrict_ce_to_mask=self.params.restrict_ce_to_mask,
-        )
-        # main on dual.
-        dual_counterfactual_outputs_student = self.student(
-            input_ids=dual_input_ids, # this is different!
-            attention_mask=dual_attention_mask, # this is different!
-            # interchange.
-            interchanged_variables=dual_counterfactual_activations_student,
-            variable_names=student_interchanged_variables_mapping,
-            sampled_interchange_position=sampled_interchange_position,
-            # loss.
-            t_logits=dual_t_logits,
-            t_hidden_states=dual_t_hidden_states,
-            causal_t_logits=dual_causal_t_logits,
-            causal_t_hidden_states=dual_causal_t_hidden_states,
-            s_logits=dual_s_logits,
-            s_hidden_states=dual_s_hidden_states,
-            temperature=self.temperature,
-            restrict_ce_to_mask=self.params.restrict_ce_to_mask,
-        )
-        
-        # sanity check.
-        assert "loss_ce" not in counterfactual_outputs_student and "loss_ce" not in dual_counterfactual_outputs_student
-        assert "loss_mlm" not in counterfactual_outputs_student and "loss_mlm" not in dual_counterfactual_outputs_student
-        assert "loss_clm" not in counterfactual_outputs_student and "loss_clm" not in dual_counterfactual_outputs_student
-        assert "loss_mse" not in counterfactual_outputs_student and "loss_mse" not in dual_counterfactual_outputs_student
-        assert "loss_cos" not in counterfactual_outputs_student and "loss_cos" not in dual_counterfactual_outputs_student
-        causal_loss_ce = counterfactual_outputs_student["causal_loss_ce"].mean() if self.multi_gpu else counterfactual_outputs_student["causal_loss_ce"]
-        causal_loss_ce += dual_counterfactual_outputs_student["causal_loss_ce"].mean() if self.multi_gpu else dual_counterfactual_outputs_student["causal_loss_ce"]
-        teacher_interchange_efficacy = \
-            counterfactual_outputs_student["teacher_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["teacher_interchange_efficacy"]
-        student_interchange_efficacy = \
-            counterfactual_outputs_student["student_interchange_efficacy"].mean() if self.multi_gpu else counterfactual_outputs_student["student_interchange_efficacy"]
-        teacher_interchange_efficacy += \
-            dual_counterfactual_outputs_student["teacher_interchange_efficacy"].mean() if self.multi_gpu else dual_counterfactual_outputs_student["teacher_interchange_efficacy"]
-        student_interchange_efficacy += \
-            dual_counterfactual_outputs_student["student_interchange_efficacy"].mean() if self.multi_gpu else dual_counterfactual_outputs_student["student_interchange_efficacy"]
-        if self.alpha_causal > 0.0:
-            loss += self.alpha_causal * causal_loss_ce
-                
-        self.total_loss_epoch += loss.item()
-        self.last_loss = loss.item()
-        self.last_loss_ce = loss_ce.item()
-        if self.alpha_mlm > 0.0:
-            self.last_loss_mlm = loss_mlm.item()
-        if self.alpha_clm > 0.0:
-            self.last_loss_clm = loss_clm.item()
-        if self.alpha_mse > 0.0:
-            self.last_loss_mse = loss_mse.item()
-        if self.alpha_cos > 0.0:
-            self.last_loss_cos = loss_cos.item()
-        # optional recording of the value.
-        self.last_loss_causal_ce = causal_loss_ce.item()
-        # record efficacy of the interchange.
-        self.last_teacher_interchange_efficacy = teacher_interchange_efficacy.item()
-        self.last_student_interchange_efficacy = student_interchange_efficacy.item()
-            
-        self.optimize(loss)
 
         self.n_sequences_epoch += input_ids.size(0)
 
@@ -1075,8 +923,7 @@ class CausalDistiller:
         wandb.log(
             {
                 "train/loss_causal_ce": self.last_loss_causal_ce,
-                "train/teacher_interchange_efficacy": self.last_teacher_interchange_efficacy,
-                "train/student_interchange_efficacy": self.last_student_interchange_efficacy,
+                "train/loss_causal_cos": self.last_loss_causal_cos,
             }, 
             step=self.n_total_iter
         )
