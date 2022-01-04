@@ -30,14 +30,19 @@ model = torch.nn.Sequential(
 model = torch.nn.DataParallel(model)
 device = torch.device("cuda")
 model.to(device)
-xx.to(device)
+xx=xx.to(device)
+y=y.to(device)
 
 # The nn package also contains definitions of popular loss functions; in this
 # case we will use Mean Squared Error (MSE) as our loss function.
 loss_fn = torch.nn.MSELoss(reduction='sum')
 
 learning_rate = 1e-6
-for t in range(2000):
+
+import time
+start = time.time()
+
+for t in range(10000):
 
     # Forward pass: compute predicted y by passing x to the model. Module objects
     # override the __call__ operator so you can call them like functions. When
@@ -68,7 +73,11 @@ for t in range(2000):
             param -= learning_rate * param.grad
 
 # You can access the first layer of `model` like accessing the first item of a list
-linear_layer = model[0]
+linear_layer = model.module[0]
 
 # For linear layer, its parameters are stored as `weight` and `bias`.
 print(f'Result: y = {linear_layer.bias.item()} + {linear_layer.weight[:, 0].item()} x + {linear_layer.weight[:, 1].item()} x^2 + {linear_layer.weight[:, 2].item()} x^3')
+
+elapsed = time.time() - start
+print(f"Time Elapsed = {elapsed} sec")
+print(f"It should be within 2 mins for 4 GPUs in parallel.")
