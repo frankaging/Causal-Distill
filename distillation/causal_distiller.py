@@ -167,8 +167,8 @@ class CausalDistiller:
             assert 0.0 <= self.mlm_mask_prop <= 1.0
             assert params.word_mask + params.word_keep + params.word_rand == 1.0
             self.pred_probs = torch.FloatTensor([params.word_mask, params.word_keep, params.word_rand])
-            self.pred_probs = self.pred_probs.to(torch.device("cuda")) if params.n_gpu > 0 else self.pred_probs
-            self.token_probs = token_probs.to(torch.device("cuda")) if params.n_gpu > 0 else token_probs
+            self.pred_probs = self.pred_probs.to(torch.device("cuda"), non_blocking=True) if params.n_gpu > 0 else self.pred_probs
+            self.token_probs = token_probs.to(torch.device("cuda"), non_blocking=True) if params.n_gpu > 0 else token_probs
             if self.fp16:
                 self.pred_probs = self.pred_probs.half()
                 self.token_probs = self.token_probs.half()
@@ -336,7 +336,7 @@ class CausalDistiller:
         _token_ids_real = token_ids[pred_mask]
         _token_ids_rand = _token_ids_real.clone().random_(self.vocab_size)
         _token_ids_mask = _token_ids_real.clone().fill_(self.params.special_tok_ids["mask_token"])
-        probs = torch.multinomial(self.pred_probs, len(_token_ids_real), replacement=True).to(_token_ids_real.device)
+        probs = torch.multinomial(self.pred_probs, len(_token_ids_real), replacement=True).to(_token_ids_real.device, non_blocking=True)
         _token_ids = (
             _token_ids_mask * (probs == 0).long()
             + _token_ids_real * (probs == 1).long()
@@ -506,7 +506,7 @@ class CausalDistiller:
             dual_start_index = random.randint(0, dual_lengths[i].tolist()-interchange_count)
             dual_end_index = dual_start_index + interchange_count
             interchange_position += [[start_index, end_index, dual_start_index, dual_end_index]]
-        interchange_position = torch.tensor(interchange_position, dtype=torch.long).to(lengths.device)
+        interchange_position = torch.tensor(interchange_position, dtype=torch.long).to(lengths.device, non_blocking=True)
         return interchange_position
     
     def train(self):
