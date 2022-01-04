@@ -141,7 +141,13 @@ class CausalDistiller:
         else:
             sampler = BatchSampler(sampler=sampler, batch_size=params.batch_size, drop_last=False)
 
-        self.dataloader = DataLoader(dataset=dataset, batch_sampler=sampler, collate_fn=dataset.batch_sequences)
+        # slower loader?
+        # self.dataloader = DataLoader(dataset=dataset, batch_sampler=sampler, collate_fn=dataset.batch_sequences)
+        self.dataloader = DataLoader(
+            dataset=dataset, batch_sampler=sampler, collate_fn=dataset.batch_sequences,
+            num_workers=8,
+            pin_memory=True,
+        )
 
         self.temperature = params.temperature
         assert self.temperature > 0.0
@@ -522,10 +528,10 @@ class CausalDistiller:
                 token_ids, lengths, dual_token_ids, dual_lengths = batch
 
                 if self.params.n_gpu > 0:
-                    token_ids = token_ids.to(torch.device("cuda"))
-                    lengths = lengths.to(torch.device("cuda"))
-                    dual_token_ids = dual_token_ids.to(torch.device("cuda"))
-                    dual_lengths = dual_lengths.to(torch.device("cuda"))
+                    token_ids = token_ids.to(torch.device("cuda"), non_blocking=True)
+                    lengths = lengths.to(torch.device("cuda"), non_blocking=True)
+                    dual_token_ids = dual_token_ids.to(torch.device("cuda"), non_blocking=True)
+                    dual_lengths = dual_lengths.to(torch.device("cuda"), non_blocking=True)
                 
                 if self.mlm:
                     token_ids, attn_mask, lm_labels, pred_mask = self.prepare_batch_mlm(
