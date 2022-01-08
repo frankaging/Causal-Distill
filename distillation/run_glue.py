@@ -222,6 +222,7 @@ def main():
 
     os.environ["TRANSFORMERS_CACHE"] = "./huggingface_inoculation_cache/"
     os.environ["WANDB_PROJECT"] = f"Causal-Distill-GLUE"
+    os.environ["WANDB_DISABLED"] = "true"
     
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -273,6 +274,8 @@ def main():
         else:
             assert out_neuron_mapping == "no_mapping"
     
+    # make the name shorter.
+    sub_output_dir = "_".join(sub_output_dir.split("_")[5:])
     # overwrite the output dir a little bit.
     if data_args.task_name not in sub_output_dir:
         sub_output_dir = f"{data_args.task_name}_{sub_output_dir}"

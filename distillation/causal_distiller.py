@@ -145,8 +145,8 @@ class CausalDistiller:
         # self.dataloader = DataLoader(dataset=dataset, batch_sampler=sampler, collate_fn=dataset.batch_sequences)
         self.dataloader = DataLoader(
             dataset=dataset, batch_sampler=sampler, collate_fn=dataset.batch_sequences,
-            num_workers=8,
-            pin_memory=True,
+            # num_workers=8,
+            # pin_memory=True,
         )
 
         self.temperature = params.temperature

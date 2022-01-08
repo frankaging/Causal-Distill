@@ -216,6 +216,8 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
+    os.environ["WANDB_DISABLED"] = "true"
+    
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -247,6 +249,9 @@ def main():
 
     sub_output_dir = model_args.model_name_or_path.strip("/").split("/")[-1].strip("/")
     model_args_list = sub_output_dir.split("_")
+    
+    # make the name shorter.
+    sub_output_dir = "_".join(sub_output_dir.split("_")[5:])
     # overwrite the output dir a little bit.
     if data_args.dataset_name not in sub_output_dir:
         sub_output_dir = f"{data_args.dataset_name}_{sub_output_dir}"
