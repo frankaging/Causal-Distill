@@ -257,10 +257,13 @@ def main():
         assert data_args.task_name in list(task_to_keys.keys())
         out_glue_task = data_args.task_name
     assert data_args.task_name != None
-
-    for i in range(len(model_args_list)):
-        if model_args_list[i] == "gseed":
-            out_seed = model_args_list[i+1]
+    
+    if "gseed" in model_args.model_name_or_path:
+        for i in range(len(model_args_list)):
+            if model_args_list[i] == "gseed":
+                out_seed = model_args_list[i+1]
+    else:
+        out_seed = training_args.seed
     if "ce_0.33_mlm_0.33_cos_0.33_causal-ce_0.0" in model_args.model_name_or_path:
         out_neuron_mapping = "no_mapping"
         out_condition = "standard"
