@@ -250,9 +250,10 @@ def main():
     model_args_list = sub_output_dir.split("_")
     
     if training_args.do_eval:
-        # we need to automatically pick out the task name.
-        task_name_list = model_args.model_name_or_path.split("_")
-        data_args.task_name = model_args_list[0]
+        if data_args.task_name == None:
+            # we need to automatically pick out the task name.
+            task_name_list = model_args.model_name_or_path.split("_")
+            data_args.task_name = model_args_list[0]
         assert data_args.task_name in list(task_to_keys.keys())
         out_glue_task = data_args.task_name
     assert data_args.task_name != None
