@@ -215,6 +215,8 @@ def main():
     assert not training_args.do_train
     assert training_args.do_eval
         
+    os.environ["WANDB_DISABLED"] = "true"
+        
     # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -369,7 +371,7 @@ def main():
 
     model.resize_token_embeddings(len(tokenizer))
     
-    print(model)
+    logger.info(model)
     
     # Preprocessing the datasets.
     # First we tokenize all the texts.

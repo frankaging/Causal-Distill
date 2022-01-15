@@ -49,7 +49,13 @@ if __name__ == "__main__":
         compressed_sd[f"distilbert.embeddings.LayerNorm.{w}"] = state_dict[f"{prefix}.embeddings.LayerNorm.{w}"]
 
     std_idx = 0
-    for teacher_idx in [0, 2, 4, 7, 9, 11][:args.num_layers]: # we may only need a small number of layers.
+    if args.num_layers <= 6:
+        candidate_layers = [0, 2, 4, 7, 9, 11]
+    else:
+        print(f"WARNING Largen-than-regular Student Detected! num_layers={args.num_layers}")
+        candidate_layers = [0, 2, 3, 4, 7, 8, 9, 10, 11] # for our ablation studies with 9 layers.
+    
+    for teacher_idx in candidate_layers[:args.num_layers]: # we may only need a small number of layers.
         for w in ["weight", "bias"]:
             compressed_sd[f"distilbert.transformer.layer.{std_idx}.attention.q_lin.{w}"] = state_dict[
                 f"{prefix}.encoder.layer.{teacher_idx}.attention.self.query.{w}"

@@ -1,3 +1,5 @@
+*_epoch*/
+*.sh
 paper_figures/
 *.csv
 *-dataset/

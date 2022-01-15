@@ -89,8 +89,9 @@ def sanity_checks(args):
     assert args.alpha_clm >= 0.0
     assert args.alpha_mse >= 0.0
     assert args.alpha_cos >= 0.0
-    assert args.alpha_causal >= 0.0
-    assert args.alpha_ce + args.alpha_mlm + args.alpha_clm + args.alpha_mse + args.alpha_cos + args.alpha_causal > 0.0
+    assert args.alpha_causal_ce >= 0.0
+    assert args.alpha_causal_cos >= 0.0
+    assert args.alpha_ce + args.alpha_mlm + args.alpha_clm + args.alpha_mse + args.alpha_cos + args.alpha_causal_ce + args.alpha_causal_cos > 0.0
 
 
 def freeze_pos_embeddings(student, args):
@@ -278,9 +279,12 @@ if __name__ == "__main__":
         "--alpha_cos", default=0.0, type=float, help="Linear weight of the cosine embedding loss. Must be >=0."
     )
     parser.add_argument(
-        "--alpha_causal", default=0.0, type=float, help="Linear weight of the causal distillation loss. Must be >=0."
+        "--alpha_causal_ce", default=0.0, type=float, help="Linear weight of the causal distillation loss. Must be >=0."
     )
-
+    parser.add_argument(
+        "--alpha_causal_cos", default=0.0, type=float, help="Linear weight of the causal distillation loss. Must be >=0."
+    )
+    
     parser.add_argument(
         "--mlm", action="store_true", help="The LM step: MLM or CLM. If `mlm` is True, the MLM is used over CLM."
     )
@@ -300,6 +304,24 @@ if __name__ == "__main__":
         type=float,
         help="Ratio of tokens to mask for interchange interventions. 1.0 means interchange all.",
     )
+    parser.add_argument(
+        "--interchange_max_token",
+        default=-1,
+        type=int,
+        help="Ratio of tokens to mask for interchange interventions. 1.0 means interchange all.",
+    )
+    parser.add_argument(
+        "--interchange_masked_token_only", 
+        default=False, action="store_true", help="Whether to only interchange with the masked tokens."
+    )
+    parser.add_argument(
+        "--interchange_consecutive_only", 
+        default=False, action="store_true", help="Whether to only interchange consecutive tokens."
+    )
+    parser.add_argument(
+        "--data_augment", default=False, action="store_true", help="Whether to experiment with data augmentation."
+    )
+    
     parser.add_argument(
         "--include_crossway", default=False, action="store_true", help="Whether to include crossway losses."
     )
@@ -393,7 +415,8 @@ if __name__ == "__main__":
             alpha_mlm=0.25,
             alpha_cos=0.25,
             alpha_clm=0.0,
-            alpha_causal=0.25,
+            alpha_causal_ce=0.25,
+            alpha_causal_cos=0.00,
             token_counts="./demo_data/binarized_text.train.token_counts.bert-base-uncased.pickle",
             student_config="./training_configs/distilbert-base-uncased.json",
             dump_path="./arxiv_results/",
@@ -403,13 +426,18 @@ if __name__ == "__main__":
             n_gpu=0,
             is_wandb=False,
             log_interval=10,
-            neuron_mapping="./training_configs/single_multilayer.nm",
+            neuron_mapping="./training_configs/single_middle_layer_6.nm",
             local_rank=-1,
             interchange_prop=0.3,
+            interchange_max_token=-1,
+            interchange_masked_token_only=False,
+            interchange_consecutive_only=False,
             batch_size=5,
             gradient_accumulation_steps=50,
             include_crossway=False,
             parallel_crossway=False,
+            data_augment=False,
+            seed=66,
         )
         print("Prelude: running in notebook for testing only.")
         args = parser.parse_args([])
@@ -420,7 +448,9 @@ if __name__ == "__main__":
     # config the runname here and overwrite.
     data_name = args.data_file.split("/")[-2]
     neuron_mapping = args.neuron_mapping.split("/")[-1].split(".")[0]
-    run_name = f"s_{args.student_type}_t_{args.teacher_type}_data_{data_name}_seed_{args.seed}_mlm_{args.mlm}_ce_{args.alpha_ce}_mlm_{args.alpha_mlm}_cos_{args.alpha_cos}_causal_{args.alpha_causal}_nm_{neuron_mapping}_crossway_{args.include_crossway}"
+    effective_batch_size = args.gradient_accumulation_steps * args.batch_size
+    run_name = f"s_{args.student_type}_t_{args.teacher_type}_data_{data_name}_"               f"seed_{args.seed}_mlm_{args.mlm}_ce_{args.alpha_ce}_mlm_{args.alpha_mlm}_"               f"cos_{args.alpha_cos}_causal-ce_{args.alpha_causal_ce}_causal-cos_"               f"{args.alpha_causal_cos}_nm_{neuron_mapping}_crossway_{args.include_crossway}_"               f"int-prop_{args.interchange_prop}_consec-token_{args.interchange_consecutive_only}_"               f"masked-token_{args.interchange_masked_token_only}_"               f"max-int-token_{args.interchange_max_token}_"               f"eff-bs_{effective_batch_size}"
+    
     args.run_name = run_name
     args.dump_path = os.path.join(args.dump_path, args.run_name)
     sanity_checks(args)
@@ -430,12 +460,6 @@ if __name__ == "__main__":
     
     distiller = prepare_distiller(args)
     
-    distiller.train()
     logger.info("Hey Zen: Let's go get some drinks.")
-
-
-# In[ ]:
-
-
-
+    distiller.train()
 

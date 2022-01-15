@@ -306,7 +306,8 @@ class Transformer(nn.Module):
         # for interchange.
         interchanged_variables=None, 
         variable_names=None,
-        sampled_interchange_position=None,
+        interchange_mask=None,
+        dual_interchange_mask=None,
     ):  # docstyle-ignore
         """
         Parameters:
@@ -337,20 +338,15 @@ class Transformer(nn.Module):
             hidden_state = layer_outputs[-1]
             
             # we need to interchange!
-            if variable_names != None and i in variable_names:
+            if variable_names != None and variable_names != "embeddings" and i in variable_names:
                 assert interchanged_variables != None
                 for interchanged_variable in variable_names[i]:
                     interchanged_activations = interchanged_variables[interchanged_variable[0]]
                     start_index = interchanged_variable[1]*self.head_dimension + interchanged_variable[2].start
                     stop_index = start_index + interchanged_variable[2].stop
-                    # TODO: we also need to consider the position.
-                    batch_size = hidden_state.shape[0]
-                    for j in range(batch_size):
-                        s = sampled_interchange_position[j][0]
-                        e = sampled_interchange_position[j][1]
-                        d_s = sampled_interchange_position[j][2]
-                        d_e = sampled_interchange_position[j][3]
-                        hidden_state[j,s:e,start_index:stop_index] = interchanged_activations[j,d_s:d_e,:]
+                    replacing_activations = interchanged_activations[dual_interchange_mask]
+                    hidden_state[...,start_index:stop_index][interchange_mask] = replacing_activations
+
             if output_attentions:
                 assert len(layer_outputs) == 2
                 attentions = layer_outputs[0]
@@ -547,7 +543,8 @@ class DistilBertModel(DistilBertPreTrainedModel):
         # for interchange.
         interchanged_variables=None, 
         variable_names=None,
-        sampled_interchange_position=None,
+        interchange_mask=None,
+        dual_interchange_mask=None,
     ):
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -564,6 +561,9 @@ class DistilBertModel(DistilBertPreTrainedModel):
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
+        if variable_names == "embeddings":
+            pass
+            
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
         if attention_mask is None:
@@ -583,7 +583,8 @@ class DistilBertModel(DistilBertPreTrainedModel):
             return_dict=return_dict,
             interchanged_variables=interchanged_variables,
             variable_names=variable_names,
-            sampled_interchange_position=sampled_interchange_position,
+            interchange_mask=interchange_mask,
+            dual_interchange_mask=dual_interchange_mask,
         )
 
 
@@ -658,7 +659,8 @@ class DistilBertForMaskedLM(DistilBertPreTrainedModel):
         # for interchange.
         interchanged_variables=None, 
         variable_names=None,
-        sampled_interchange_position=None,
+        interchange_mask=None,
+        dual_interchange_mask=None,
         # for calculating the losses.
         t_logits=None,
         t_hidden_states=None,
@@ -692,7 +694,8 @@ class DistilBertForMaskedLM(DistilBertPreTrainedModel):
             return_dict=return_dict,
             interchanged_variables=interchanged_variables,
             variable_names=variable_names,
-            sampled_interchange_position=sampled_interchange_position,
+            interchange_mask=interchange_mask,
+            dual_interchange_mask=dual_interchange_mask,
         )
         hidden_states = dlbrt_output[0]  # (bs, seq_length, dim)
         prediction_logits = self.vocab_transform(hidden_states)  # (bs, seq_length, dim)
@@ -779,21 +782,8 @@ class DistilBertForMaskedLM(DistilBertPreTrainedModel):
             assert t_hidden_states is not None
             assert s_logits is not None
             assert s_hidden_states is not None
-
-            assert s_logits.size() == t_logits.size()
-            # https://github.com/peterliht/knowledge-distillation-pytorch/blob/master/model/net.py#L100
-            # https://github.com/peterliht/knowledge-distillation-pytorch/issues/2
-            if restrict_ce_to_mask:
-                mask = (lm_labels > -1).unsqueeze(-1).expand_as(s_logits)  # (bs, seq_length, voc_size)
-            else:
-                mask = attention_mask.unsqueeze(-1).expand_as(s_logits)  # (bs, seq_length, voc_size)
-            s_logits_slct = torch.masked_select(s_logits, mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
-            s_logits_slct = s_logits_slct.view(-1, s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
-            t_logits_slct = torch.masked_select(t_logits, mask)  # (bs * seq_length * voc_size) modulo the 1s in mask
-            t_logits_slct = t_logits_slct.view(-1, s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
-            assert t_logits_slct.size() == s_logits_slct.size()
-            
             assert causal_t_hidden_states is not None
+
             causal_s_logits, causal_s_hidden_states = \
                 student_outputs["logits"], student_outputs["hidden_states"]
             assert causal_s_logits.size() == causal_t_logits.size()
@@ -809,22 +799,6 @@ class DistilBertForMaskedLM(DistilBertPreTrainedModel):
             causal_t_logits_slct = causal_t_logits_slct.view(-1, causal_s_logits.size(-1))  # (bs * seq_length, voc_size) modulo the 1s in mask
             assert causal_t_logits_slct.size() == causal_s_logits_slct.size()
             
-            # measure the efficacy of the interchange.
-            teacher_interchange_efficacy = (
-                self.ce_loss_fct(
-                    nn.functional.log_softmax(causal_t_logits_slct / temperature, dim=-1),
-                    nn.functional.softmax(t_logits_slct / temperature, dim=-1),
-                )
-                * (temperature) ** 2
-            )
-
-            student_interchange_efficacy = (
-                self.ce_loss_fct(
-                    nn.functional.log_softmax(causal_s_logits_slct / temperature, dim=-1),
-                    nn.functional.softmax(s_logits_slct / temperature, dim=-1),
-                )
-                * (temperature) ** 2
-            )
             causal_loss_ce = (
                 self.ce_loss_fct(
                     nn.functional.log_softmax(causal_s_logits_slct / temperature, dim=-1),
@@ -833,9 +807,23 @@ class DistilBertForMaskedLM(DistilBertPreTrainedModel):
                 * (temperature) ** 2
             )
             student_outputs["causal_loss_ce"] = causal_loss_ce
-            student_outputs["teacher_interchange_efficacy"] = teacher_interchange_efficacy
-            student_outputs["student_interchange_efficacy"] = student_interchange_efficacy
             
+            # now, let us get causal_loss_cos as well.
+            s_hidden_states = causal_s_hidden_states[-1]  # (bs, seq_length, dim)
+            t_hidden_states = causal_t_hidden_states[-1]  # (bs, seq_length, dim)
+            mask = attention_mask.unsqueeze(-1).expand_as(s_hidden_states)  # (bs, seq_length, dim)
+            assert s_hidden_states.size() == t_hidden_states.size()
+            dim = s_hidden_states.size(-1)
+
+            s_hidden_states_slct = torch.masked_select(s_hidden_states, mask)  # (bs * seq_length * dim)
+            s_hidden_states_slct = s_hidden_states_slct.view(-1, dim)  # (bs * seq_length, dim)
+            t_hidden_states_slct = torch.masked_select(t_hidden_states, mask)  # (bs * seq_length * dim)
+            t_hidden_states_slct = t_hidden_states_slct.view(-1, dim)  # (bs * seq_length, dim)
+
+            target = s_hidden_states_slct.new(s_hidden_states_slct.size(0)).fill_(1)  # (bs * seq_length,)
+            causal_loss_cos = self.cosine_loss_fct(s_hidden_states_slct, t_hidden_states_slct, target)
+            student_outputs["causal_loss_cos"] = causal_loss_cos
+
         return student_outputs
 
 

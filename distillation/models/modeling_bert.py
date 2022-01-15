@@ -548,7 +548,8 @@ class BertEncoder(nn.Module):
         # for interchange.
         interchanged_variables=None, 
         variable_names=None,
-        sampled_interchange_position=None,
+        interchange_mask=None,
+        dual_interchange_mask=None,
     ):
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
@@ -598,20 +599,14 @@ class BertEncoder(nn.Module):
             hidden_states = layer_outputs[0]
             
             # we need to interchange!
-            if variable_names != None and i in variable_names:
+            if variable_names != None and variable_names != "embeddings" and i in variable_names:
                 assert interchanged_variables != None
                 for interchanged_variable in variable_names[i]:
                     interchanged_activations = interchanged_variables[interchanged_variable[0]]
                     start_index = interchanged_variable[1]*self.head_dimension + interchanged_variable[2].start
                     stop_index = start_index + interchanged_variable[2].stop
-                    # TODO: we also need to consider the position.
-                    batch_size = hidden_states.shape[0]
-                    for j in range(batch_size):
-                        s = sampled_interchange_position[j][0]
-                        e = sampled_interchange_position[j][1]
-                        d_s = sampled_interchange_position[j][2]
-                        d_e = sampled_interchange_position[j][3]
-                        hidden_states[j,s:e,start_index:stop_index] = interchanged_activations[j,d_s:d_e,:]
+                    replacing_activations = interchanged_activations[dual_interchange_mask]
+                    hidden_states[...,start_index:stop_index][interchange_mask] = replacing_activations
             
             if use_cache:
                 next_decoder_cache += (layer_outputs[-1],)
@@ -931,7 +926,8 @@ class BertModel(BertPreTrainedModel):
         # for interchange.
         interchanged_variables=None, 
         variable_names=None,
-        sampled_interchange_position=None,
+        interchange_mask=None,
+        dual_interchange_mask=None,
     ):
         r"""
         encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
@@ -973,6 +969,9 @@ class BertModel(BertPreTrainedModel):
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
+        if variable_names == "embeddings":
+            pass
+            
         batch_size, seq_length = input_shape
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
@@ -1032,7 +1031,8 @@ class BertModel(BertPreTrainedModel):
             return_dict=return_dict,
             interchanged_variables=interchanged_variables,
             variable_names=variable_names,
-            sampled_interchange_position=sampled_interchange_position,
+            interchange_mask=interchange_mask,
+            dual_interchange_mask=dual_interchange_mask,
         )
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
@@ -1353,7 +1353,8 @@ class BertForMaskedLM(BertPreTrainedModel):
         # for interchange.
         interchanged_variables=None, 
         variable_names=None,
-        sampled_interchange_position=None,
+        interchange_mask=None,
+        dual_interchange_mask=None,
     ):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
@@ -1377,7 +1378,8 @@ class BertForMaskedLM(BertPreTrainedModel):
             return_dict=return_dict,
             interchanged_variables=interchanged_variables,
             variable_names=variable_names,
-            sampled_interchange_position=sampled_interchange_position,
+            interchange_mask=interchange_mask,
+            dual_interchange_mask=dual_interchange_mask,
         )
 
         sequence_output = outputs[0]
