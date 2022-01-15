@@ -1,7 +1,7 @@
 ![Python 3.7](https://img.shields.io/badge/python-3.7-blueviolet.svg?style=plastic)
 ![License CC BY-NC](https://img.shields.io/badge/license-MIT-05b502.svg?style=plastic)
 
-# Causal Distillation for Language Models
+# Causal Distillation for Language Models (DIITO)
 <p align="center">
   <b><a href="https://zen-wu.social/">Zhengxuan Wu</a>*,<a href="https://atticusg.github.io/">Atticus Geiger</a>*, <a href="https://www.linkedin.com/in/jsrozner/">Josh Rozner</a>, <a href="https://www.elisakreiss.com/">Elisa Kreiss</a>, <a href="https://www.linkedin.com/in/hansonhxlu/">Hanson Lu</a>, <a href="https://web.stanford.edu/~icard/">Thomas Icard</a>, <a href="https://web.stanford.edu/~cgpotts/">Christopher Potts</a>, <a href="https://cocolab.stanford.edu/ndg">Noah D. Goodman</a></b></span>
 </p>
@@ -11,31 +11,28 @@
 </div>
 <p></p>
 
-The is an implementation of our preprint [Causal Distillation for Language Models](https://zen-wu.social/papers/ACL22_CausalDistill.pdf). The standard approach to distillation trains a student model against two objectives: a task-specific objective (e.g., language modeling) and an imitation objective that encourages the hidden states of the student model to be similar to those of the larger teacher model. In this paper, we show that it is beneficial to augment distillation with a third objective that encourages the student to imitate the causal computation process of the teacher through **interchange intervention training (IIT)**. 
+The is an implementation of our preprint [Causal Distillation for Language Models](https://zen-wu.social/papers/ACL22_CausalDistill.pdf). The standard approach to distillation trains a student model against two objectives: a task-specific objective (e.g., language modeling) and an imitation objective that encourages the hidden states of the student model to be similar to those of the larger teacher model. In this paper, we show that it is beneficial to augment distillation with a third objective that encourages the student to imitate the causal computation process of the teacher through interchange intervention training (IIT). We name our method **the distillation interchange intervention training objective (DIITO)**.
 
 We fork our main codebase from the [Huggingface Distillation Interface](https://github.com/huggingface/transformers/tree/master/examples/research_projects/distillation).
 
 ## Release Notes
 :white_check_mark: 12/02/2021 Our paper on [Interchange Intervention Training (IIT)](https://arxiv.org/abs/2112.00826) is released! Read this for a more formal definition of the method.   
-:white_check_mark: 12/06/2021 Released the causal distillation codebase with [the preprint](https://zen-wu.social/papers/ACL22_CausalDistill.pdf).   
-:white_check_mark: 12/06/2021 Released evaluation results on distilled tiny-BERT (3 layers) with the Wiki-Text 103M dataset.   
-⬜️ Released evaluation results on causal-distilled tiny-BERT (3 layers) with the Wiki-Text 103M + BookCorpus dataset.   
-⬜️ Released evaluation results on causal-distilled BERT (6 layers) with the Wiki-Text 103M + BookCorpus dataset.    
-⬜️ Released more ablation studies.   
-⬜️ Released causal-distilled tiny-BERT (3 layers) model files.   
-⬜️ Released causal-distilled BERT (6 layers) model files.   
+:white_check_mark: 12/06/2021 Released the causal distillation codebase with [the preprint](https://arxiv.org/abs/2112.02505).   
+:white_check_mark: 12/06/2021 Released evaluation results on distilled tiny-BERT (3 layers) with the Wiki-Text 103M dataset.  
+:white_check_mark: 01/14/2022 Released newer version of **DIITO**, and its evaluation results. You can view our privately shared [updated preprint](https://zen-wu.social/papers/ACL22_CausalDistill.pdf) for more details.   
+⬜️ Released DIITO (6 layers) model trained with English Wikipedia + Bookcorpus.   
 
 If you experience any issues or have suggestions, please contact me either thourgh the issues page or at wuzhengx@stanford.edu. 
 
 ## Benchmark Results
 Here are the results on the dev sets of GLUE:
 
-| Model                     | Average-score                  | CoLA | MNLI | MRPC | QNLI | QQP  | RTE  | SST-2| STS-B| WNLI              |
-| :---:                     |    :---:                       | :---:| :---:| :---:| :---:| :---:| :---:| :---:| :---:| :---:             |
-| DistilBERT (3 layers)     |  **67.8**<sup>1</sup>          | 22.8 | 71.6 | 78.2 | 82.1 | 84.3 | 55.4 | 86.5 | 56.7 | 24.2              |
-| CausalBERT (3 layers)     |  **69.7**<sup>1</sup>          | 25.0 | 72.9 | 78.6 | 83.1 | 84.9 | 55.4 | 86.9 | 66.5 | 21.5              |
-
-<sup>1</sup> Average-score computed without WNLI.
+| Model                     |# of Training Tokens| Average-score                  | CoLA | MNLI | MRPC | QNLI | QQP  | RTE  | SST-2| STS-B |
+| :---:                     | :---: |    :---:                       | :---:| :---:| :---:| :---:| :---:| :---:| :---:| :---:|
+| DistilBERT (6 layers) [Devlin et al., 2019](https://arxiv.org/abs/1910.01108)     | 3.3B  |  **79.59**          | 51.30 | 82.10 | 87.50 | 89.20 | 88.50 | 59.90 | 91.30 | 86.90 |  
+| DistilBERT (6 layers)     | 0.1B  |  **75.80**          | 40.43 | 78.95 | 87.45 | 84.76 | 84.96 | 60.10 | 89.38 | 80.40 |
+| DIITO (6 layers)     | 0.1B  |  **77.14**          |  45.17 | 79.68 | 88.18 | 85.83 | 85.31 | 60.94 | 90.32 | 81.69 |
+| DIITO (6 layers)     | 3.3B  |      (-)      | (-) | (-)| (-) | (-) | (-) | (-) | (-) | (-) |
 
 ## Main Contents
 * [Citation](#citation)
@@ -72,7 +69,6 @@ If you use this repository, please cite the following two papers: [paper for int
 - Pytorch Version: 1.9.0
 - Transfermers Version: 4.11.3
 - Datasets Version: Version: 1.8.0
-- We have performed experiments on Titan V GPU. We assume 12GB of GPU memory (more memory can expedite training).
 - Since we build our codebase off the [Huggingface Distillation Interface](https://github.com/huggingface/transformers/tree/master/examples/research_projects/distillation), please review their doc for requirements.
 
 ## Dataset
@@ -158,58 +154,37 @@ python scripts/extract_distilbert.py \
 
 Now, here is an example for you to distill with our causal distillation objective or without,
 ```bash
-CUDA_VISIBLE_DEVICES=9,4 python causal_train.py \
---force \
---n_gpu 2 \
---is_wandb \
---log_interval 10 \
---student_type distilbert \
---student_config ./training_configs/distilbert-base-uncased-small.json \
---student_pretrained_weights ./distillation_checkpoints/bert-base-uncased_num_layer_3.pth \
---teacher_type bert \
---teacher_name bert-base-uncased \
---neuron_mapping ./training_configs/single_middle.nm \
---mlm --alpha_ce 0.25 --alpha_mlm 0.25 --alpha_cos 0.25 --alpha_clm 0.0 --alpha_causal 0.25 \
---freeze_pos_embs \
---dump_path ./results/ \
---data_file ./wikitext-15M/binarized_text.train.bert-base-uncased.pickle \
---token_counts ./wikitext-15M/binarized_text.train.token_counts.bert-base-uncased.pickle \
---seed 42 \
---gradient_accumulation_steps 50 \
---n_epoch 3 \
---batch_size 5
-
 CUDA_VISIBLE_DEVICES=0,1,2,3 python causal_train.py \
 --force \
 --n_gpu 4 \
---is_wandb \
 --log_interval 10 \
 --student_type distilbert \
---student_config ./training_configs/distilbert-base-uncased-small.json \
---student_pretrained_weights ./distillation_checkpoints/bert-base-uncased_num_layer_3.pth \
+--student_config ./training_configs/distilbert-base-uncased-large.json \
+--student_pretrained_weights ./distillation_checkpoints/bert-base-uncased_num_layer_6.pth \
 --teacher_type bert \
 --teacher_name bert-base-uncased \
---neuron_mapping ./training_configs/single_middle.nm \
---mlm --alpha_ce 0.33 --alpha_mlm 0.33 --alpha_cos 0.33 --alpha_clm 0.0 --alpha_causal 0.00 \
+--neuron_mapping ./training_configs/single_middle_layer_6.nm \
+--mlm --alpha_ce 0.25 --alpha_mlm 0.25 --alpha_cos 0.25 --alpha_clm 0.0 --alpha_causal_ce 0.25 --alpha_causal_cos 0.0 \
+--interchange_prop 0.3 --interchange_max_token -1 --interchange_consecutive_only \
 --freeze_pos_embs \
 --dump_path ./results/ \
---data_file ./wikitext-15M/binarized_text.train.bert-base-uncased.pickle \
---token_counts ./wikitext-15M/binarized_text.train.token_counts.bert-base-uncased.pickle \
+--data_file ./wikitext-dataset/binarized_text.train.bert-base-uncased.pickle \
+--token_counts ./wikitext-dataset/binarized_text.train.token_counts.bert-base-uncased.pickle \
 --seed 42 \
---gradient_accumulation_steps 124 \
---n_epoch 6 \
---batch_size 4
+--n_epoch 3 \
+--gradient_accumulation_steps 6 \
+--batch_size 40
 ```
-Note that you can simply turn our causal distillation objective on/off through setting the arguments.
+Note that you can simply turn our causal distillation objective on/off through setting the arguments. For instance, we recently add this argument `--alpha_causal_cos` to support causal loss on the cosine loss term. Note that the effective batch size in our setting is set to 240.
 
 ## Evaluation
 After you get your distilled models, you need to fine-tune them and evaluate them with downstream tasks. We provide you all the scripts you need to run.
 
 ### MLM Evaluation
 ```bash
-CUDA_VISIBLE_DEVICES=5 python run_mlm.py \
---model_name_or_path ./results/s_distilbert_t_bert_data_wikitext-15M_seed_42_mlm_True_ce_0.25_mlm_0.25_cos_0.25_causal_0.25_nm_single_multilayer/ \
---dataset_dir ../../bert-mid-tuning/data-files/wikitext-15M/ \
+CUDA_VISIBLE_DEVICES=0 python run_mlm.py \
+--model_name_or_path ./path_to_your_model/ \
+--dataset_dir ../path_to_your_data/ \
 --tokenizer_name bert-base-uncased \
 --do_eval \
 --output_dir /tmp/test-mlm \
@@ -218,8 +193,8 @@ CUDA_VISIBLE_DEVICES=5 python run_mlm.py \
 
 ### GLUE Evaluation
 ```bash
-CUDA_VISIBLE_DEVICES=5,7,8,9 python run_glue.py \
---model_name_or_path ./results/s_distilbert_t_bert_data_wikitext-dataset_seed_42_mlm_True_ce_0.33_mlm_0.33_cos_0.33_causal_0.0_nm_single_middle/ \
+CUDA_VISIBLE_DEVICES=0,1,2,3 python run_glue.py \
+--model_name_or_path ./path_to_your_model/ \
 --tokenizer_name bert-base-uncased \
 --task_name sst2 \
 --do_train \
@@ -235,8 +210,8 @@ CUDA_VISIBLE_DEVICES=5,7,8,9 python run_glue.py \
 
 ### CoNLL Evaluation
 ```bash
-CUDA_VISIBLE_DEVICES=2,3,7,8 python run_ner.py \
---model_name_or_path ./results/s_distilbert_t_bert_data_wikitext-dataset_seed_42_mlm_True_ce_0.33_mlm_0.33_cos_0.33_causal_0.0_nm_single_middle_crossway_False/ \
+CUDA_VISIBLE_DEVICES=0,1,2,3 python run_ner.py \
+--model_name_or_path ./path_to_your_model/ \
 --tokenizer_name bert-base-uncased \
 --dataset_name conll2003 \
 --do_train \
@@ -248,8 +223,8 @@ CUDA_VISIBLE_DEVICES=2,3,7,8 python run_ner.py \
 
 ### SQuAD Evaluation
 ```bash
-CUDA_VISIBLE_DEVICES=2,3,7,8 python run_qa.py \
---model_name_or_path ./results/s_distilbert_t_bert_data_wikitext-dataset_seed_42_mlm_True_ce_0.33_mlm_0.33_cos_0.33_causal_0.0_nm_single_middle_crossway_False/ \
+CUDA_VISIBLE_DEVICES=0,1,2,3 python run_qa.py \
+--model_name_or_path ./path_to_your_model/ \
 --tokenizer_name bert-base-uncased \
 --dataset_name squad \
 --do_train \
