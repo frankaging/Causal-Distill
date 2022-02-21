@@ -13,7 +13,7 @@
 
 The is an implementation of our preprint [Causal Distillation for Language Models](https://zen-wu.social/papers/ACL22_CausalDistill.pdf). The standard approach to distillation trains a student model against two objectives: a task-specific objective (e.g., language modeling) and an imitation objective that encourages the hidden states of the student model to be similar to those of the larger teacher model. In this paper, we show that it is beneficial to augment distillation with a third objective that encourages the student to imitate the causal computation process of the teacher through interchange intervention training (IIT). We name our method **the distillation interchange intervention training objective (DIITO)**.
 
-**We find DIITO is helper in a low-resource setting. DIITO performs on-par with (97%) standard distillation but training with 97% less of data.**
+**We find DIITO is helpful in a low-resource setting. DIITO performs on-par with (97%) standard distillation but training with 97% less of data.**
 
 We fork our main codebase from the [Huggingface Distillation Interface](https://github.com/huggingface/transformers/tree/master/examples/research_projects/distillation).
 
