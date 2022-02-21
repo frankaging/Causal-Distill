@@ -21,7 +21,7 @@ We fork our main codebase from the [Huggingface Distillation Interface](https://
 :white_check_mark: 12/02/2021 Our paper on [Interchange Intervention Training (IIT)](https://arxiv.org/abs/2112.00826) is released! Read this for a more formal definition of the method.   
 :white_check_mark: 12/06/2021 Released the causal distillation codebase with [the preprint](https://arxiv.org/abs/2112.02505).   
 :white_check_mark: 12/06/2021 Released evaluation results on distilled tiny-BERT (3 layers) with the Wiki-Text 103M dataset.  
-:white_check_mark: 01/14/2022 Released newer version of **DIITO**, and its evaluation results. You can view our privately shared [updated preprint](https://zen-wu.social/papers/ACL22_CausalDistill.pdf) for more details. 
+:white_check_mark: 01/14/2022 Released newer version of **DIITO**, and its evaluation results. You can view our privately shared [updated preprint](https://zen-wu.social/papers/ACL22_CausalDistill.pdf) for more details.  
 :white_check_mark: 02/21/2022 Released the codebase for [**DIITO-XXS**](https://github.com/frankaging/Causal-Distill-XXS) that applies DITTO to distill task-specific models in NLP with a focus on supporting model distillation in a low-resource setting. Check out the repo for more info!
 ⬜️ Released DIITO (6 layers) model trained with English Wikipedia + Bookcorpus.   
 
