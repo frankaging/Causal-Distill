@@ -1,3 +1,5 @@
+glue_models/
+*out*
 *_epoch*/
 *.sh
 paper_figures/
